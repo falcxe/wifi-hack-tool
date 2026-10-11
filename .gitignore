@@ -1,0 +1,42 @@
+# Захваты и хэши -- это ключи от сетей, пусть и своих.
+# В публичном репозитории им не место: любой, кто склонирует проект,
+# сможет их подобрать. Локально они остаются в captures/ как есть.
+captures/
+*.pcap
+*.pcapng
+*.cap
+*.22000
+*.hc22000
+# ...кроме фикстур тестов: это публичные захваты из wifislax/hcxtools,
+# с известными паролями, и без них тесты на свежем клоне не запустятся.
+!tests/fixtures/*.pcapng
+
+# hashcat держит там же восстановленные пароли открытым текстом.
+*.potfile
+*.dictstat
+*.dictstat2
+*.pid
+show.log
+*.log
+
+# Чужие бинарники и сборки: лицензии, размер, ничего общего с исходниками.
+assets/hashcat-*/
+assets/*.exe
+assets/*.bin
+assets/rockyou*.txt
+
+# Крупные словари -- по ссылке в assets/wordlists-info.json.
+assets/probable*.txt
+
+# Сгенерированные превью и артефакты сборки.
+ui_artifacts/
+__pycache__/
+*.pyc
+.pio/
+build/
+
+# Служебное.
+nul
+_screen.png
+_tui_form_preview.txt
+AGENTS.md
