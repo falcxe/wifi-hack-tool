@@ -68,6 +68,10 @@ CAPTURE_SUFFIXES = (".pcap", ".cap", ".pcapng", ".22000")
 #: the line itself, because the command parser is busy for as long as it runs.
 STOP_TOKEN = b"\r\nbrkcap\r\n"
 
+#: The capture loop's status line: how many devices it has heard on the target,
+#: how many EAPOL messages have arrived, and whether message 1 has been seen.
+_CLIENTS_RE = re.compile(r"clients=(?P<clients>\d+)\s+eapol=(?P<eapol>\d+)")
+
 #: How long to wait for the ready prompt before giving up on a command. Long
 #: enough for ``ls`` on flash, short enough that a wedged board does not hang the
 #: run screen -- the caller is on an asyncio loop and a blocking wait here would
@@ -534,7 +538,8 @@ class Board:
 
     def start_capture(self, bssid: str, channel: int, *, ssid: str = "",
                       timeout: float = DEFAULT_TIMEOUT,
-                      on_output: Callable[[str], None] | None = None) -> str:
+                      on_output: Callable[[str], None] | None = None,
+                      on_clients: Callable[[int, int], None] | None = None) -> str:
         """Ask the board to capture a handshake for ``bssid``, deauthing as it goes.
 
         ``capture_handshake`` in the firmware turns the interface promiscuous,
@@ -577,7 +582,9 @@ class Board:
         if not name or any(ch.isspace() for ch in name):
             name = mac
         line = f"capturehandshake -mac {mac} -ssid {name} -channel {channel}"
-        return self._run_until_capture_ends(line, timeout=timeout, on_output=on_output)
+        return self._run_until_capture_ends(line, timeout=timeout,
+                                            on_output=on_output,
+                                            on_clients=on_clients)
 
     # The firmware names the file it just wrote, and that name is on the wire
         # before any of the prose below. Matching on it is what lets a capture be
@@ -632,7 +639,8 @@ class Board:
         return last
 
     def _run_until_capture_ends(self, line: str, *, timeout: float,
-                                on_output: Callable[[str], None] | None = None) -> str:
+                                on_output: Callable[[str], None] | None = None,
+                                on_clients: Callable[[int, int], None] | None = None) -> str:
         """Send ``line`` and read until the board has the capture.
 
         Returns as soon as the board says the file is written. Staying until the
@@ -646,6 +654,11 @@ class Board:
         A board that says "command not found", or explains why it stopped, has
         answered the question -- that answer used to be thrown away, leaving the
         program to sit silent through the entire deadline.
+
+        ``on_clients(devices, eapol)`` carries the board's own tally of how many
+        devices it has heard on the network and how many handshake messages have
+        arrived. It is the difference between a capture that is working and a
+        capture with nobody to knock over: both print nothing else for minutes.
         """
         deadline = time.monotonic() + timeout
         buf = b""
@@ -669,6 +682,11 @@ class Board:
                 time.sleep(0.005)
                 continue
             buf += chunk
+            if on_clients is not None:
+                # Every match, not the first: the board reports once a few
+                # seconds, and a single read can easily carry several lines.
+                for report in _CLIENTS_RE.finditer(chunk.decode("utf-8", "replace")):
+                    on_clients(int(report.group("clients")), int(report.group("eapol")))
             if on_output is not None:
                 fresh = _only_new(spoken, chunk)
                 if fresh:

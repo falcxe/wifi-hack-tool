@@ -92,6 +92,22 @@ def show_last_result() -> None:
         state.log_scroll.set(0)
 
 
+def saved_action() -> tuple[Action, ...]:
+    """The entry into the connection history, or nothing when it is off.
+
+    A shortcut that is switched off must not stay on the menu as a row that
+    presses and says no: the user should not have to remember why half their
+    networks are not in the list.
+    """
+    from .. import profiles as profiles_mod
+    from . import controller
+
+    if not profiles_mod.HISTORY_ENABLED:
+        return ()
+    return (Action("Ключи", controller.go_to_saved,
+                   description=DESCRIPTIONS["Ключи"], category="Переходы"),)
+
+
 def available() -> list[Action]:
     from . import board_captures, controller, forms
     from .screens import audit, crack, crack_form, result, saved, scan
@@ -128,8 +144,7 @@ def available() -> list[Action]:
                    description="Сохранённые файлы со стика и найденные в них пары EAPOL.", category="Источники"),
             Action("К списку сетей", controller.go_to_scan,
                    description="Главный экран со всеми найденными сетями.", category="Переходы"),
-            Action("Ключи", controller.go_to_saved,
-                   description=DESCRIPTIONS["Ключи"], category="Переходы"),
+            *saved_action(),
             Action("Параметры", open_parameters,
                    description=DESCRIPTIONS["Параметры"], category="Настройки"),
             Action("Справка", forms.open_help,

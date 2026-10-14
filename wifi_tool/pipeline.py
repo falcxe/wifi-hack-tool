@@ -739,10 +739,14 @@ async def saved_key_for(network: Network) -> str:
     Checked before anything else because it is the only step that does not
     depend on a guess being right: if this machine has ever joined the network,
     the answer is already on disk and no capture or dictionary is involved.
+
+    Skipped entirely when :data:`wifi_tool.profiles.HISTORY_ENABLED` is off --
+    that is the difference between auditing a network and recalling one this
+    machine was already in.
     """
     from . import profiles as profiles_mod
 
-    if not network.ssid:
+    if not profiles_mod.HISTORY_ENABLED or not network.ssid:
         return ""
     try:
         return await asyncio.to_thread(profiles_mod.find_key, network.ssid)
@@ -800,9 +804,16 @@ async def auto_attack(
     cb = cb or Callbacks()
     started = time.monotonic()
 
-    # 1. The stored key. Instant, deterministic, needs no capture hardware.
-    cb.phase("saved")
-    stored = await saved_key_for(network)
+    # 1. The stored key. Instant, deterministic, needs no capture hardware --
+    # and skipped outright, phase included, when the connection history is
+    # switched off. A checklist that lists a stage the run does not take would
+    # be the program claiming it read a profile it deliberately did not read.
+    from . import profiles as profiles_mod
+
+    stored = ""
+    if profiles_mod.HISTORY_ENABLED:
+        cb.phase("saved")
+        stored = await saved_key_for(network)
     if stored:
         # A profile key is a claim, not a proof. It is the right answer whenever
         # this machine is the one that joined the network, and it is also exactly

@@ -1,10 +1,25 @@
-"""Keep Windows console reads off OpenTUI's rendering thread.
+"""Shape the terminal session OpenTUI drives: reads off-thread, resize settled.
 
-OpenTUI 0.1.2 waits on the console handle and then calls ReadFile. The handle
-also signals for key releases, focus and resize events that produce no VT
-bytes. ReadFile then waits for the next key and stops every frame meanwhile.
+Two Windows-specific defects in OpenTUI 0.1.2 are corrected here, both by
+wrapping rather than patching: the renderer is given a configuration that asks
+for what it only infers, and the event loop is given the resize debounce it
+already implements for Unix.
+
+**Input.** OpenTUI waits on the console handle and then calls ReadFile. The
+handle also signals for key releases, focus and resize events that produce no
+VT bytes. ReadFile then waits for the next key and stops every frame meanwhile.
 The adapter buffers actual bytes on one reader thread; parsing and dispatch
 remain on OpenTUI's thread.
+
+**Resize.** ``EventLoop.run`` has two resize paths. On Unix a SIGWINCH sets a
+flag and the loop applies the new size only after 100 ms of quiet. Windows has
+no SIGWINCH, so it takes the polling fallback -- which calls ``_handle_resize``
+the moment the polled size differs, with no settling time. Dragging a window
+edge then reports every intermediate size, and each one reaches
+``CliRenderer.resize``, which resizes the buffers and sets ``_force_next_render``
+for a complete repaint: dozens of full-screen redraws per second, each one
+starting while the last is still going out. That is the tearing. The debounce
+that already exists in the library is reused here rather than invented.
 """
 from __future__ import annotations
 
@@ -251,26 +266,99 @@ def _cancel_console_read(reader: threading.Thread) -> None:
             kernel.CloseHandle(handle)
 
 
+#: How long the size has to hold still before the renderer is told. Matches
+#: ``event_loop._RESIZE_DEBOUNCE``, which is what the Unix path uses.
+RESIZE_SETTLE_SECONDS = 0.10
+
+
+def _settled_resize() -> None:
+    """Give ``EventLoop`` the resize settling its Unix path already has.
+
+    The original handler is left doing the work -- it re-reads the terminal size
+    when it finally runs, so a drag that ends somewhere new is still measured
+    correctly. All this adds is the waiting, and the re-check that keeps the
+    wait alive while the size is still moving.
+    """
+    import shutil
+
+    from opentui.input import event_loop
+
+    if os.name != "nt":
+        return
+    original = event_loop.EventLoop._handle_resize
+
+    def _handle_resize(self) -> None:
+        self._resize_pending = True
+        self._last_resize_time = time.perf_counter()
+        if getattr(self, "_settle_installed", False):
+            return
+        self._settle_installed = True
+
+        def flush(_delta: float) -> None:
+            if not self._resize_pending:
+                return
+            # Still moving: restart the wait instead of landing on a size the
+            # user has already dragged past.
+            if shutil.get_terminal_size() != self._last_term_size:
+                self._last_resize_time = time.perf_counter()
+                return
+            if time.perf_counter() - self._last_resize_time < RESIZE_SETTLE_SECONDS:
+                return
+            self._resize_pending = False
+            original(self)
+
+        self.on_frame(flush)
+
+    event_loop.EventLoop._handle_resize = _handle_resize
+
+
 @contextmanager
-def nonblocking_terminal_input():
-    """Install the app-local adapter for this renderer session only."""
+def terminal_session():
+    """Install the app-local terminal behaviour for this renderer session only.
+
+    Wraps input reads, settles resize, and says plainly what the renderer was
+    asked for. Every change is undone on the way out, so a second render in the
+    same process starts from the library's own behaviour again.
+    """
     from opentui.input import _backend
     from opentui.input import event_loop
+
     if os.name == "nt":
         from opentui.input._backend_windows import WindowsBackend
 
-    original = _backend.create_backend
+    original_create = _backend.create_backend
     original_handler = event_loop.InputHandler
+    original_resize = event_loop.EventLoop._handle_resize
 
     def create_backend():
-        backend = original()
+        backend = original_create()
         return BufferedInputBackend(backend) if isinstance(backend, WindowsBackend) else backend
 
     if os.name == "nt":
         _backend.create_backend = create_backend
+        _settled_resize()
     event_loop.InputHandler = ResponsiveInputHandler
     try:
         yield
     finally:
-        _backend.create_backend = original
+        _backend.create_backend = original_create
         event_loop.InputHandler = original_handler
+        event_loop.EventLoop._handle_resize = original_resize
+
+
+#: The old name, kept because a test and a caller still spell it this way.
+nonblocking_terminal_input = terminal_session
+
+
+#: What the renderer is told to do, stated instead of inferred.
+#:
+#: ``use_mouse`` defaults to "enable when the tree has mouse handlers", which
+#: is a guess made once, before a screen is necessarily mounted. Left to it, a
+#: wheel event nobody handled scrolls the *terminal* -- the window moves under
+#: the drawing and the drawing no longer lines up with anything. Asking for it
+#: outright means the wheel belongs to the list. ``use_alternate_screen`` is
+#: already the default and is spelled out for the same reason: it is what puts
+#: the session on the alternate screen, so nothing the app draws can end up in
+#: the terminal's scrollback.
+def renderer_config() -> dict:
+    return {"use_alternate_screen": True, "use_mouse": True}

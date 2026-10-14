@@ -277,5 +277,42 @@ class CaptureRequestTests(unittest.TestCase):
         self.assertEqual(board._serial.written, [], "a bad address was sent anyway")
 
 
+class DeviceTallyTests(unittest.TestCase):
+    """How many devices the board has heard, and what that means for the wait.
+
+    Both numbers answer one question from different sides: is anyone on this
+    network to knock over? The board counts stations, the host counts EAPOL
+    messages, and a capture with neither is waiting on nobody.
+    """
+
+    def parsed(self, chunks):
+        seen = []
+        board = bruce.Board(bruce.BoardInfo(port="COM5"))
+        # The board's own "the file is written" line ends the capture; without it
+        # the read waits out the timeout and fails, which is not what is under
+        # test here.
+        board._serial = SerialBytes(list(chunks) + [
+            b"capture file ready: returning to console\n"
+            b"Done. Check /BrucePCAP/handshakes\n"])
+        board.start_capture("10:a3:b8:3a:c1:b9", 4, ssid="RT-WiFi-317", timeout=2.0,
+                            on_clients=lambda devices, eapol: seen.append((devices, eapol)))
+        return seen
+
+    def test_the_status_line_is_read_into_numbers(self):
+        seen = self.parsed([b"clients=4 eapol=12 msg1=1\n"])
+        self.assertEqual(seen[-1], (4, 12))
+
+    def test_a_quiet_capture_reports_zero_rather_than_nothing(self):
+        self.assertEqual(self.parsed([b"clients=0 eapol=0 msg1=0\n"])[-1], (0, 0))
+
+    def test_chatter_that_is_not_the_status_line_is_left_alone(self):
+        seen = self.parsed([b"Preparing deauth frame to AP -> 10:A3:B8:3A:C1:B9\n"])
+        self.assertEqual(seen, [])
+
+    def test_the_latest_reading_wins(self):
+        seen = self.parsed([b"clients=1 eapol=2 msg1=1\nclients=1 eapol=6 msg1=1\n"])
+        self.assertEqual(seen[-1], (1, 6))
+
+
 if __name__ == "__main__":
     unittest.main()

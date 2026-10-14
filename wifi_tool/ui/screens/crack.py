@@ -81,8 +81,29 @@ def _capture_rows(inner: int, seconds_left: int, size: int, cancelling: bool,
         Text(truncate(f"Осталось {seconds_left} с · {_size(size)}", inner),
              fg=TEXT_PRIMARY, wrap_mode="none"),
     ]
+    rows.extend(_device_rows(inner))
     if cancelling:
         rows.append(Text("Остановка…", fg=WARNING, wrap_mode="none"))
+    return rows
+
+
+def _device_rows(inner: int) -> list:
+    """What the board can hear on this network, and what that means for the wait.
+
+    Devices seen is a lower bound -- a client in power save that has not said
+    anything yet is not in the number -- but zero is unambiguous: there is
+    nobody to knock off, and every further minute of deauthentication will
+    produce exactly nothing.
+    """
+    devices = state.capture_clients.peek()
+    if devices is None:
+        return []
+    eapol = state.capture_eapol.peek()
+    rows = [Text(truncate(f"Устройств видно: {devices} · EAPOL: {eapol}", inner),
+                 fg=TEXT_PRIMARY if devices else WARNING, wrap_mode="none")]
+    if not devices and not eapol:
+        rows.append(Text(truncate("Похоже, к сети ничего не подключено", inner),
+                         fg=WARNING, wrap_mode="none"))
     return rows
 
 

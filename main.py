@@ -25,7 +25,7 @@ from wifi_tool.console import enable_utf8_console
 from wifi_tool.options import CrackOptions
 from wifi_tool.ui import controller
 from wifi_tool.ui.app import App
-from wifi_tool.ui.terminal_input import nonblocking_terminal_input
+from wifi_tool.ui.terminal_input import renderer_config, terminal_session
 
 
 def _parse_args(argv: list[str]) -> dict:
@@ -95,8 +95,8 @@ async def _run(pending_path: str | None, automatic: bool = False) -> None:
     else:
         controller.boot()
     try:
-        with nonblocking_terminal_input():
-            await render(App)
+        with terminal_session():
+            await render(App, renderer_config())
     finally:
         controller.stop_pending()
 

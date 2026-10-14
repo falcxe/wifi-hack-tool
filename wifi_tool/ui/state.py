@@ -13,6 +13,10 @@ control_focus: Signal = Signal({}, name="control_focus")
 
 # Scan screen
 networks: Signal = Signal([], name="networks")
+#: {bssid: StationInfo} -- what the saved captures said about the devices behind
+#: each access point. Empty until a scan has filled it, and never a census: it
+#: is what was heard at the moment of the last capture, nothing more.
+station_counts: Signal = Signal({}, name="station_counts")
 selected: Signal = Signal(0, name="selected")
 network_scroll_offset: Signal = Signal(0, name="network_scroll_offset")
 scan_query: Signal = Signal("", name="scan_query")
@@ -49,6 +53,11 @@ capture_bytes: Signal = Signal(0, name="capture_bytes")
 #: What the capture produced: EAPOL handshakes and PMKIDs found, or "" while it
 #: is still running / never ran. Set once, from the conversion report.
 capture_found: Signal = Signal("", name="capture_found")
+#: Devices heard on the target network during a board capture, and EAPOL
+#: messages seen. ``None`` until the board reports, and it counts devices that
+#: said something -- a lower bound on what is actually connected, not a census.
+capture_clients: Signal = Signal(None, name="capture_clients")
+capture_eapol: Signal = Signal(0, name="capture_eapol")
 #: Which rung of the automatic ladder is running, e.g. "Этап 3/6: RockYou WPA".
 stage: Signal = Signal("", name="stage")
 cancelled: Signal = Signal(False, name="cancelled")
@@ -245,6 +254,9 @@ def reset() -> None:
     capture_total.set(None)
     capture_bytes.set(0)
     capture_found.set("")
+    capture_clients.set(None)
+    capture_eapol.set(0)
+    station_counts.set({})
     cancelled.set(False)
     run_stages.set([])
     tick.set(0)
@@ -269,6 +281,19 @@ def reset() -> None:
 def network_identity(network) -> str:
     return (network.bssid.replace("-", ":").casefold() if network.bssid else
             f"{network.ssid}\0{network.auth}".casefold())
+
+
+def refresh_station_counts() -> None:
+    """Re-read what the saved captures know about who is on each network.
+
+    Called from the pipeline, never from a draw: parsing a capture costs real
+    time, and doing it on the render thread is a visible stall the first time a
+    folder of captures is scanned. The answer is cached against the folder, so
+    after the first pass this is a dictionary lookup.
+    """
+    from .. import stations
+
+    station_counts.set(stations.survey())
 
 
 def replace_networks(items: list[Network]) -> None:

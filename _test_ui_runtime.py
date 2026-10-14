@@ -19,7 +19,9 @@ from unittest.mock import patch
 
 from opentui.input.handler import InputHandler
 from wifi_tool.ui import controller, state
-from wifi_tool.ui.terminal_input import BufferedInputBackend, ResponsiveInputHandler, nonblocking_terminal_input
+from wifi_tool.ui.terminal_input import (BufferedInputBackend,
+                                        ResponsiveInputHandler,
+                                        nonblocking_terminal_input)
 
 
 class BlockingBackend:

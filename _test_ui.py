@@ -226,7 +226,14 @@ def test_scan_narrow_keeps_identity() -> None:
         row = next((ln for ln in listing if "MyHomeWiFi" in ln), None)
         assert row, f"narrow: SSID clipped away at {width}x{height}"
         assert "92%" in row, f"narrow: signal clipped at {width}: {row!r}"
-        assert str(NETS[0].channel) in row, f"narrow: channel clipped at {width}: {row!r}"
+        # The channel is not a column of the list -- it moved to the details
+        # panel, which is framed only when the terminal is tall enough to hold
+        # it. Where the panel exists, it has to name the channel.
+        if height >= 24:
+            panel = "\n".join(lines)
+            assert f"Канал {NETS[0].channel}" in panel, (
+                f"narrow: channel missing from the details panel at {width}x{height}"
+            )
         # One network per row -- rows must never bleed into each other.
         assert "CafeFree" not in row, f"narrow: columns overlap at {width}: {row!r}"
         # Every network row is exactly one line and every line holds one SSID.

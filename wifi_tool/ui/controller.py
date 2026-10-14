@@ -214,6 +214,11 @@ async def start_scan() -> None:
     try:
         nets = await pipeline.scan_networks(state.push_log)
         state.replace_networks(nets)
+        # What the saved captures know about who is on each network. Parsing
+        # them belongs here rather than in the redraw: the first pass over a
+        # folder of captures is real work, and the render thread is the one
+        # place a user would see it as a freeze.
+        await asyncio.to_thread(state.refresh_station_counts)
     except pipeline.PipelineError as exc:
         state.scan_error.set(str(exc))
     except asyncio.CancelledError:
@@ -525,6 +530,8 @@ def _set_run_context(source: str, context: str) -> None:
     state.capture_total.set(None)
     state.capture_bytes.set(0)
     state.capture_found.set("")
+    state.capture_clients.set(None)
+    state.capture_eapol.set(0)
     state.progress_known.set(False)
     state.run_speed.set("")
     state.run_eta.set("")
@@ -556,6 +563,20 @@ def _prepare_board_view(network: Network | None = None) -> None:
     state.current_activity.set("Подключение к плате")
     navigation.push("crack")
     start_ticking()
+
+
+def _board_devices(devices: int, eapol: int) -> None:
+    """What the board can hear on the network, onto the screen while it waits.
+
+    The count is a lower bound on what is connected -- devices that have not
+    said anything are not in it -- but it is the one number that distinguishes
+    "the handshake is coming" from "there is nobody here to knock over", and the
+    two are indistinguishable from silence.
+    """
+    state.capture_clients.set(devices)
+    state.capture_eapol.set(eapol)
+    if not devices and not eapol:
+        state.status.set("Ждём, но устройств на сети не слышно")
 
 
 def _board_failure(message: str) -> None:
@@ -590,7 +611,8 @@ async def _board_capture_rounds(board, target: Network, dest: Path,
         window = min(BOARD_CAPTURE_ROUND, deadline - time.monotonic())
         task = asyncio.ensure_future(asyncio.to_thread(
             board.start_capture, target.bssid, target.channel,
-            ssid=target.ssid, timeout=window, on_output=_board_says))
+            ssid=target.ssid, timeout=window, on_output=_board_says,
+            on_clients=_board_devices))
         while not task.done():
             # ``asyncio.wait`` and not a sleep-polling loop: awaiting a
             # coroutine that never awaits a future does not let the loop process
@@ -1244,7 +1266,7 @@ async def run_auto_attack(net: Network, *, request: RunRequest | None = None) ->
     request = request or RunRequest("auto", _crack_options, capture_seconds=CAPTURE_SECONDS,
                                     total_runtime=_auto_budget(_crack_options))
     state.capture_total.set(request.capture_seconds)
-    begin_run("saved", "capture", "convert", "crack")
+    begin_run(*_run_stages())
     try:
         def readiness_after_profile_check() -> pipeline.Readiness:
             return probe_readiness_sync(request.options)
@@ -1337,7 +1359,7 @@ def start_auto_attack(net: Network, *, request: RunRequest | None = None) -> Non
     # spawns. Navigation to the run screen happens synchronously above, so with
     # the plan set in the coroutine the screen painted once with no checklist and
     # an empty journal -- for as long as the first probe took, which is seconds.
-    begin_run("saved", "capture", "convert", "crack")
+    begin_run(*_run_stages())
     start_ticking()
     _spawn(run_auto_attack(net, request=request))
 
@@ -1506,8 +1528,28 @@ def _capture_blocker(readiness) -> str:
     return "захват недоступен на этом адаптере."
 
 
+def _run_stages() -> tuple[str, ...]:
+    """The checklist for an automatic run, minus whatever is switched off.
+
+    The history stage is the first one because it is the only answer that needs
+    no capture and no luck, and the first one to disappear when that shortcut is
+    turned off -- the list is built here so the screen cannot promise a stage
+    the pipeline will not take.
+    """
+    from .. import profiles as profiles_mod
+
+    stages = ("capture", "convert", "crack")
+    return ("saved", *stages) if profiles_mod.HISTORY_ENABLED else stages
+
+
 def go_to_saved() -> None:
     """Switch to the saved-networks screen and load its profiles."""
+    from .. import profiles as profiles_mod
+
+    if not profiles_mod.HISTORY_ENABLED:
+        state.push_log("Просмотр истории подключений отключён — сети берутся "
+                       "только своим хендшейком.")
+        return
     navigation.push("saved")
     state.saved_loading.set(True)
     refresh_saved()
@@ -1792,12 +1834,23 @@ def stop_pending() -> None:
 
 def refresh_saved() -> None:
     """Re-read the saved Wi-Fi profiles."""
+    from .. import profiles as profiles_mod
+
+    if not profiles_mod.HISTORY_ENABLED:
+        state.saved.set([])
+        state.saved_loading.set(False)
+        return
     state.saved_loading.set(True)
     _spawn(_load_saved())
 
 
-def saved_boot() -> asyncio.Task:
+def saved_boot() -> asyncio.Task | None:
     """Show the saved-networks screen: it needs no hardware and no admin."""
+    from .. import profiles as profiles_mod
+
+    if not profiles_mod.HISTORY_ENABLED:
+        state.push_log("Просмотр истории подключений отключён")
+        return None
     state.saved_loading.set(True)
     navigation.push("saved")
     return _spawn(_load_saved())

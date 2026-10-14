@@ -435,6 +435,14 @@ class AutoAttackTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.report = None
+        # These tests are about the ladder that follows the history check, so
+        # the check is switched back on for them. The shipped setting is off --
+        # see test_history_off_never_reads_a_profile -- and running them under
+        # the real default would quietly test a different code path than the
+        # one the assertions are written about.
+        self.history = patch.object(profiles, "HISTORY_ENABLED", True)
+        self.history.start()
+        self.addCleanup(self.history.stop)
 
     def _isolated_crack(self):
         original = cracker.crack
@@ -469,6 +477,38 @@ class AutoAttackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.method, "ключ Windows")
         # No capture, no hashcat, no ladder: the stored key is the whole answer.
         capture.assert_not_awaited()
+
+    async def test_history_off_never_reads_a_profile(self):
+        """With the history switch off, a stored key cannot end the run.
+
+        The obvious way to write this test -- patch the reader to return a
+        password and assert it was ignored -- would pass even if the switch
+        were broken, because the reader is never reached either way. So this
+        asserts the reader itself is never called, and that no "saved" phase is
+        announced: the run has to be honest about the stages it skipped.
+        """
+        with patch.object(profiles, "HISTORY_ENABLED", False), \
+                patch.object(profiles, "find_key", return_value="SolvedIt") as reader, \
+                patch.object(pipeline, "obtain_hashes", AsyncMock()), \
+                patch.object(cracker, "find_hashcat", return_value=None):
+            with self.assertRaises(pipeline.PipelineError):
+                await pipeline.auto_attack(OWN, readiness=self._readiness())
+        reader.assert_not_called()
+
+    async def test_no_saved_phase_is_announced_when_the_history_is_off(self):
+        """A skipped stage must not be announced as a stage.
+
+        The checklist the user watches is built from these calls. Emitting
+        "saved" while deliberately not looking would show a row that fills in
+        and completes, describing work that never happened.
+        """
+        phases: list[str] = []
+        cb = pipeline.Callbacks(on_phase=phases.append)
+        with patch.object(profiles, "HISTORY_ENABLED", False), \
+                patch.object(cracker, "find_hashcat", return_value=None):
+            with self.assertRaises(pipeline.PipelineError):
+                await pipeline.auto_attack(OWN, readiness=self._readiness(), cb=cb)
+        self.assertNotIn("saved", phases)
 
     async def test_missing_hashcat_is_only_fatal_once_the_stored_key_misses(self):
         ready = pipeline.Readiness(admin=False, hashcat=None, wordlist=ASSETS / "rockyou-wpa.txt")

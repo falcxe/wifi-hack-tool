@@ -6,9 +6,9 @@ from opentui.hooks import use_keyboard, use_paste, use_terminal_dimensions
 
 from .. import controls, dialogs, motion, state
 from ..actions import Action, group_actions, key_of
-from ..controller import go_to_saved, go_to_setup, open_audit, quit_app, request_rescan
+from ..controller import go_to_setup, open_audit, quit_app, request_rescan
 from ..theme import (ACCENT, OUTLINE, TEXT_SECONDARY, MAX_WORKSPACE_WIDTH,
-                     ERROR, TEXT_PRIMARY, WARNING, auth_color, signal_bar)
+                     ERROR, TEXT_PRIMARY, SUCCESS, WARNING, auth_color, signal_bar)
 from ..widgets import (col, edit_preview, list_viewport, text_line,
                        truncate, workspace, workspace_footer, workspace_header,
                        workspace_section, wrap)
@@ -62,13 +62,41 @@ def _paste(event) -> None:
 def _widths(term_width: int) -> dict[str, int]:
     available = max(20, term_width - 4)
     widths = {"mark": 2, "signal": 11, "ssid": 16, "bssid": 0,
-              "enc": 0, "auth": 9}
+              "enc": 0, "auth": 9, "clients": 6}
     if available >= 70:
         widths.update(bssid=18, enc=8)
     if available >= 94:
         widths["auth"] = 20
     widths["ssid"] = max(8, min(32, available - sum(v for k, v in widths.items() if k != "ssid")))
     return widths
+
+
+def _stations(net):
+    """What the saved captures said about the devices behind this network."""
+    key = (net.bssid or "").replace(":", "").lower()
+    return state.station_counts.peek().get(key)
+
+
+def _clients_cell(net) -> str:
+    """The device count, and a mark when the hash is already in hand.
+
+    A number alone answers "how many were there when we last looked", which is
+    the useful half; the mark answers the half that actually decides what to
+    attack -- a network whose handshake is already on disk needs no capture at
+    all.
+    """
+    info = _stations(net)
+    if info is None:
+        return "—"
+    mark = "✓" if info.has_hash else "·"
+    return f"{mark}{info.devices}"
+
+
+def _clients_color(net) -> str:
+    info = _stations(net)
+    if info is None:
+        return TEXT_SECONDARY
+    return SUCCESS if info.has_hash else (WARNING if not info.devices else TEXT_PRIMARY)
 
 
 def _window_start(total: int, selected: int, visible_rows: int, current: int) -> int:
@@ -97,6 +125,8 @@ def _select_and_scroll(index: int, visible_rows: int) -> None:
 
 
 def scan_actions() -> list[Action]:
+    from ..commands import saved_action
+
     return group_actions([
         Action("Отчёт", open_audit, primary=True, enabled=state.selected_network() is not None, category="Основное"),
         Action("Обновить", request_rescan, enabled=not state.scanning.peek(), category="Основное"),
@@ -104,7 +134,7 @@ def scan_actions() -> list[Action]:
         Action("Сбросить поиск", lambda: set_query(""), enabled=bool(state.scan_query.peek()), category="Список и поиск"),
         Action("Параметры", go_to_setup, category="Настройки"),
         Action("Подробности ошибки", _show_error, enabled=bool(state.scan_error.peek()), category="Сведения"),
-        Action("Ключи", go_to_saved, category="Переходы"),
+        *saved_action(),
         Action("Выход", quit_app, danger=True, category="Приложение"),
     ])
 
@@ -267,6 +297,7 @@ def ScanScreen() -> Box:
     if widths["enc"]:
         headings.append(col("Шифр", widths["enc"]))
     headings.append(col("Защита", widths["auth"]))
+    headings.append(col("Устр.", widths["clients"]))
     rows = [Row(*headings, height=1, flex_shrink=0)]
     for position in indices:
         index, net = items[position]
@@ -284,6 +315,8 @@ def ScanScreen() -> Box:
             cells.append(col(net.protection or "—", widths["enc"]))
         cells.append(col(truncate(net.auth if widths["auth"] >= 20 else _security(net), widths["auth"] - 1),
                          widths["auth"], fg=auth_color(net.auth)))
+        cells.append(col(_clients_cell(net), widths["clients"],
+                         fg=_clients_color(net)))
         rows.append(motion.paint(Row(*cells, height=1, flex_shrink=0,
                         on_mouse_down=click_handler(choose)), "scan", selected_pos, position, token=token,
                                                     focused=focus == "list", zebra=True))

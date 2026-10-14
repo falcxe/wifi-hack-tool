@@ -1,12 +1,20 @@
 """Fixture-only interaction and layout regressions for the unified workspace."""
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
+from datetime import datetime
 from dataclasses import replace
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+
+# These tests drive the audit screen with a readiness built by hand, so what
+# they assert is a fixed set of actions. A board plugged into the machine adds
+# another one to that set -- which made a suite about layout fail or pass
+# depending on whether the stick happened to be connected.
+os.environ["WIFI_TOOL_NO_BOARD"] = "1"
 
 from opentui.structs import display_width
 from opentui.testing import test_render
@@ -21,6 +29,7 @@ from wifi_tool.ui.app import App
 from wifi_tool.ui.screens import result, saved, scan
 from wifi_tool.ui.screens import audit
 from wifi_tool.ui.screens.crack import _capture_rows
+from wifi_tool.ui.theme import SUCCESS, WARNING
 from wifi_tool.ui.widgets import edit_preview, truncate, truncate_middle, wrap
 
 SIZES = ((44, 16), (60, 20), (80, 24), (100, 30), (120, 40), (160, 40))
@@ -263,6 +272,34 @@ class RedesignTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(all(display_width(line) <= width for line in frame.splitlines()))
                     native.stop()
                     view.destroy()
+
+    async def test_the_device_column_answers_which_network_is_easiest(self):
+        """The list shows what the saved captures knew about each network.
+
+        A number is the half that ranks networks; the mark beside it is the half
+        that decides what to do -- a network whose handshake is already on disk
+        needs no capture at all.
+        """
+        from wifi_tool.stations import StationInfo
+
+        state.reset()
+        key = NETS[0].bssid.replace(":", "").lower()
+        empty = NETS[1].bssid.replace(":", "").lower()
+        state.replace_networks(NETS)
+        self.assertEqual(scan._clients_cell(NETS[0]), "—",
+                         "a network with no capture should say nothing, not zero")
+
+        state.station_counts.set({key: StationInfo(devices=4, randomised=1,
+                                                    captured_at=datetime(2026, 10, 11, 21, 41),
+                                                    has_hash=True)})
+        self.assertEqual(scan._clients_cell(NETS[0]), "✓4")
+        self.assertEqual(scan._clients_color(NETS[0]), SUCCESS)
+
+        state.station_counts.set({empty: StationInfo(devices=0, randomised=0,
+                                                     captured_at=datetime(2026, 10, 12, 10, 47))})
+        self.assertEqual(scan._clients_cell(NETS[1]), "·0")
+        self.assertEqual(scan._clients_color(NETS[1]), WARNING,
+                         "an empty network should not look healthy")
 
     async def test_parameters_disclosure_inline_error_and_anchored_start(self):
         forms.open_form(capture=str(FIXTURE))

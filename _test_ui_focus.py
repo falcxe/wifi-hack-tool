@@ -11,6 +11,7 @@ from opentui.testing import test_render
 
 from _test_secondary_ui import FIXTURE, NETWORK, ROOT, setup_case
 from _test_tui_setup import field_index, native_input
+from wifi_tool import profiles
 from wifi_tool.models import CrackResult, RunRequest
 from wifi_tool.options import CrackOptions
 from wifi_tool.ui import commands, controls, controller, dialogs, forms, state
@@ -38,6 +39,14 @@ class FocusTests(unittest.IsolatedAsyncioTestCase):
         self.clock = patch.object(controller, "start_ticking")
         self.clock.start()
         self.addCleanup(self.clock.stop)
+        # The focus tests move the cursor between menu rows, and two of them
+        # use «Ключи» as the row in the middle of the list. With the connection
+        # history switched off that row is gone by design, so the switch goes
+        # back on here: what is under test is focus, not the switch. The switch
+        # itself has its own tests in _test_auto.py.
+        self.history = patch.object(profiles, "HISTORY_ENABLED", True)
+        self.history.start()
+        self.addCleanup(self.history.stop)
 
     async def render(self, case: str, width: int = 80, height: int = 24):
         setup_case(case, self.directory)

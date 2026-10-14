@@ -9,6 +9,14 @@ produce results on a machine whose adapter cannot do monitor mode.
 Field labels are localized, so both the Russian and English forms are matched:
 ``Все профили пользователей`` / ``All User Profile`` and
 ``Содержимое ключа`` / ``Contents of the key``.
+
+**The switch.** :data:`HISTORY_ENABLED` decides whether the program looks here
+at all. On by default, because a stored key is the one answer that needs no
+capture and no luck. Turned off when the job is to get into a network rather
+than to recall one this machine was already in: with it off, nothing reads a
+profile, the «Сохранённые сети» screen is unreachable, and the automatic ladder
+starts at the capture. One flag, read from the places that would consult it --
+this module stays a plain reader, so nothing can reach the profiles by accident.
 """
 from __future__ import annotations
 
@@ -16,6 +24,13 @@ import re
 from dataclasses import dataclass
 
 from . import netsh
+
+#: False = ignore the connection history completely.
+#:
+#: Deliberately the one place to change: the pipeline, the run checklist and the
+#: navigation all ask this, so turning it back on cannot leave one of them
+#: quietly reading profiles anyway.
+HISTORY_ENABLED = False
 
 _PROFILE_LIST_RE = re.compile(
     r"^\s*(?:Все профили пользователей|All User Profile)\s*:\s*(.+?)\s*$",
