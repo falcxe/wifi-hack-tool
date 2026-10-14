@@ -743,16 +743,41 @@ def _no_capture_message(out_path: Path, backend: Backend, detail: str) -> str:
 
 
 def setup_hint() -> str:
-    """Human-readable instructions for installing a capture backend."""
+    """Human-readable instructions for installing a capture backend.
+
+    Leads with Npcap because it is the part that can be installed from here and
+    the part that silently fails when done wrong: without raw 802.11 the driver
+    returns Ethernet frames, the capture file stays empty, and nothing errors.
+    """
+    from .installer import npcap_state
+
+    state = npcap_state()
+    if not state["installed"]:
+        npcap = (
+            "Не установлен Npcap -- без него кадры 802.11 недоступны, а только\n"
+            "  Ethernet-кадры, в которых рукопожатия нет. Поставить его:\n"
+            "    uv run python tools/setup.py --npcap\n\n"
+            "  Нужны права администратора, и окно установщика придётся подтвердить:\n"
+            "  тихая установка бывает только в платной Npcap OEM. Галочка\n"
+            "  \"Support raw 802.11 traffic (and monitor mode)\" уже выставлена.\n\n"
+        )
+    elif not state["dot11"]:
+        npcap = (
+            "Npcap установлен, но БЕЗ поддержки raw 802.11. С ним захват пишет\n"
+            "  Ethernet-кадры и всегда получается пустой файл -- без всякой ошибки.\n"
+            "  Переустановить Npcap с этой галочкой:\n"
+            "    uv run python tools/setup.py --npcap\n\n"
+        )
+    else:
+        npcap = "Npcap установлен, raw 802.11 включён.\n\n"
+
     return (
         "Не найден ни один инструмент захвата.\n\n"
-        "Вариант 1 -- cap80211 (надёжнее всего на Windows):\n"
-        "  Скачай cap80211, распакуй и положи в папку assets рядом с wifi_tool:\n"
+        f"{npcap}"
+        "Инструмент захвата:\n"
+        "  Вариант 1 -- tshark из Wireshark (уже установлен? добавь его папку в PATH).\n"
+        "  Вариант 2 -- cap80211: скачай, распакуй и положи в assets:\n"
         "    assets\\netcap80211.exe\n\n"
-        "Вариант 2 -- Wireshark с Npcap:\n"
-        "  Установи Wireshark и при установке включи\n"
-        "  \"Support raw 802.11 traffic (and monitor mode)\",\n"
-        "  затем добавь папку Wireshark в PATH.\n\n"
         "Если команда запуска отличается, опиши её в assets\\capture.json:\n"
         '  { "cap80211": { "args": ["-i", "{iface}", "-f", "{out}"] } }'
     )

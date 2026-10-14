@@ -231,6 +231,188 @@ def ensure_7z(
     return local if local.exists() else None
 
 
+# --------------------------------------------------------------------------
+# Npcap
+# --------------------------------------------------------------------------
+#
+# Different in kind from everything above, and worth spelling out.
+#
+# Npcap is not a program you drop in a folder: it is a signed installer that
+# registers an NDIS filter driver and a lightweight filter driver. Three of its
+# own documented facts shape what can be automated here.
+#
+# * ``/S`` (silent install) is "available only with Npcap OEM". The free
+#   installer from npcap.com shows its GUI. Pretending otherwise by passing
+#   ``/S`` produces a window that appears to be doing nothing.
+# * ``/dot11_support=yes`` *does* work in GUI mode and preselects the "Support
+#   raw 802.11 traffic (and monitor mode)" box -- which is the one option this
+#   project cannot do without.
+# * Installing a filter driver "may cause brief interruptions to network
+#   connectivity" (Npcap issue #53), and may return 3010, reboot required.
+#
+# So this step downloads and verifies the official installer, refuses to run
+# without elevation, launches it with the needed option already ticked, and
+# reads the documented exit code back. The click-through is the user's, not a
+# limitation worked around.
+
+NPCAP_URL = "https://npcap.com/dist/npcap-{version}.exe"
+NPCAP_VERSION = "1.83"
+#: Verified against the signed installer from npcap.com on 2026-10-14; the file
+#: carries a valid Authenticode signature from Nmap Software LLC.
+NPCAP_SHA256 = "1bf58936296992d6b03e6c36621ca8239a786c13b89d761d210fa21731567ac0"
+
+#: Exit codes, from the Npcap users' guide. Anything else is reported as-is.
+NPCAP_EXIT = {
+    0: "установлено",
+    1: "установка отменена (кнопка Cancel)",
+    2: "установка прервана скриптом",
+    350: "не удалось, нужен перезапуск",
+    1618: "установка уже идёт, дождись её окончания",
+    1633: "Npcap не поддерживается на этой платформе",
+    3010: "установлено, требуется перезагрузка",
+}
+
+
+def npcap_state() -> dict:
+    """What Npcap looks like on this machine. Never raises, never changes.
+
+    Each field is read independently and an unknown one stays ``None``. They
+    used to be read in one ``try`` where a missing ``DisplayVersion`` value --
+    which older builds do not write -- aborted the whole function and reported
+    an installed Npcap as having no version, no raw-802.11 support and no
+    helper, i.e. as not installed at all.
+    """
+    import os
+
+    state: dict = {"installed": False, "dot11": None, "version": None,
+                   "wlan_helper": None, "path": None}
+    try:
+        import winreg
+    except ImportError:
+        return state
+
+    def read(path: str, *names: str):
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as key:
+                for name in names:
+                    try:
+                        value, _ = winreg.QueryValueEx(key, name)
+                        return value
+                    except OSError:
+                        continue
+        except OSError:
+            return None
+        return None
+
+    service = r"SYSTEM\CurrentControlSet\Services\npcap"
+    if read(service, "ImagePath") is not None:
+        state["installed"] = True
+        state["version"] = read(service, "DisplayVersion", "Version")
+    raw = read(service + r"\Parameters", "Dot11Support")
+    if raw is not None:
+        try:
+            state["dot11"] = bool(int(raw))
+        except (TypeError, ValueError):
+            state["dot11"] = None
+
+    helper = (Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32"
+              / "Npcap" / "WlanHelper.exe")
+    state["wlan_helper"] = helper if helper.exists() else None
+    state["path"] = helper.parent if helper.parent.exists() else None
+    return state
+
+
+def npcap_needs_install() -> bool:
+    """True when capture is impossible or unconfigured.
+
+    Missing Npcap and missing raw-802.11 support are different failures and get
+    different messages: the first needs the installer, the second needs the one
+    checkbox, and sending someone to re-run the whole install over a single
+    unticked box is the advice that costs an afternoon.
+    """
+    state = npcap_state()
+    return not state["installed"] or not state["dot11"]
+
+
+def install_npcap(
+    *,
+    on_log: Optional[Callable[[str], None]] = None,
+    assume_yes: bool = False,
+) -> dict:
+    """Download, verify and launch the official Npcap installer.
+
+    Never raises. Returns a dict with ``status`` (one of ``installed``,
+    ``already`` / ``already-no-dot11``, ``denied``, ``cancelled``, ``reboot``,
+    ``failed``), ``message`` and ``code``.
+
+    The GUI appears: ``/S`` is an OEM-only flag and the free installer has no
+    quiet mode. ``/dot11_support=yes`` is passed anyway, because it works in
+    GUI mode and ticks the box this project needs before the window opens.
+    """
+    log = on_log or (lambda _line: None)
+    state = npcap_state()
+    if state["installed"] and state["dot11"]:
+        log(f"Npcap {state['version'] or ''} уже установлен, raw 802.11 включён.")
+        return {"status": "already", "message": "установлен", "code": 0}
+    if state["installed"] and not state["dot11"]:
+        log("Npcap установлен, но без поддержки raw 802.11 — переустановлю "
+            "с нужной галочкой.")
+
+    from .assets import is_admin
+
+    if not is_admin():
+        message = (
+            "Npcap ставит драйвер, поэтому нужны права администратора.\n"
+            "  Запусти в терминале от администратора, либо просто запусти\n"
+            f"  {_INSTALL_HINT} --npcap повторно оттуда."
+        )
+        log(message)
+        return {"status": "denied", "message": message, "code": None}
+
+    url = NPCAP_URL.format(version=NPCAP_VERSION)
+    log(f"Npcap: скачиваю {url}")
+    installer_path = Path(tempfile.gettempdir()) / f"npcap-{NPCAP_VERSION}.exe"
+    try:
+        _download(url, installer_path, NPCAP_SHA256)
+    except InstallError as exc:
+        log(f"  не получилось: {exc}")
+        return {"status": "failed", "message": str(exc), "code": None}
+    log("  подпись Nmap Software LLC, SHA-256 OK")
+
+    args = ["/dot11_support=yes"]
+    if assume_yes:
+        # Still no /S: it is OEM-only and would be ignored by the free build.
+        args.append("/winpcap_mode=yes")
+    args.append(f"/D={installer_path.parent}")
+
+    log("")
+    log("  Сейчас откроется установщик Npcap. Нажми Install и дождись конца.")
+    log("  Галочка «Support raw 802.11 traffic (and monitor mode)» уже стоит.")
+    log("  Установка драйвера может на пару секунд оборвать сеть — это")
+    log("  задокументированное поведение Npcap, не поломка.")
+    log("")
+
+    try:
+        proc = subprocess.run([str(installer_path), *args], timeout=900)
+        code = proc.returncode
+    except subprocess.TimeoutExpired:
+        message = "установщик не ответил за 15 минут"
+        log(message)
+        return {"status": "failed", "message": message, "code": None}
+    finally:
+        installer_path.unlink(missing_ok=True)
+
+    meaning = NPCAP_EXIT.get(code, f"код {code}")
+    log(f"  установщик завершился: {meaning}")
+    if code == 0:
+        return {"status": "installed", "message": meaning, "code": code}
+    if code == 3010:
+        return {"status": "reboot", "message": meaning, "code": code}
+    if code in (1, 2):
+        return {"status": "cancelled", "message": meaning, "code": code}
+    return {"status": "failed", "message": meaning, "code": code}
+
+
 def find_7z() -> Optional[Path]:
     """Locate a 7-Zip / 7za / 7zr binary for unpacking hashcat's archive.
 
@@ -478,7 +660,8 @@ def installed_wordlists() -> dict[str, Path]:
     the repository ships, and reporting it as RockYou hides the fact that the
     real list is missing.
     """
-    from .options import find_extra_wordlist, find_quick_wordlist, find_wordlist
+    from .options import (find_extra_wordlist, find_quick_wordlist, find_rockyou,
+                       find_wordlist)
 
     found: dict[str, Path] = {}
     rockyou = find_rockyou(ASSETS_DIR)

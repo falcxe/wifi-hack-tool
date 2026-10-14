@@ -27,6 +27,10 @@ from wifi_tool.console import enable_utf8_console  # noqa: E402
 from wifi_tool.cracker import find_hashcat  # noqa: E402
 from wifi_tool.options import ensure_captures_dir, find_quick_wordlist  # noqa: E402
 
+#: Npcap installs a driver, so it is never installed silently -- this exact
+#: command is what the user needs to copy when the step declines to run.
+_INSTALL_NPCAP = "uv run python tools/setup.py --npcap"
+
 
 def _utf8() -> None:
     """Print Cyrillic as text, not as mojibake.
@@ -82,6 +86,37 @@ def _check_captures() -> None:
         print(f"  (!) папка captures/ недоступна: {exc}")
 
 
+def _npcap_step(want_install: bool) -> None:
+    """Report or install Npcap, the driver the capture backends sit on."""
+    state = installer.npcap_state()
+    if state["installed"] and state["dot11"]:
+        version = state["version"] or "установлен"
+        print(f"  [OK] Npcap {version}, raw 802.11 включён")
+        return
+    if state["installed"]:
+        print("  [--] Npcap установлен, но БЕЗ поддержки raw 802.11")
+        print("       без неё рукопожатие не записать — нужна переустановка")
+    else:
+        print("  [--] Npcap не установлен — без него захват рукопожатия невозможен")
+
+    if not want_install:
+        print(f"       поставить: {_INSTALL_NPCAP}")
+        return
+
+    result = installer.install_npcap(on_log=lambda line: print(f"    {line}"))
+    status = result["status"]
+    if status in ("installed", "already"):
+        print("  [OK] Npcap установлен")
+    elif status == "reboot":
+        print("  [OK] Npcap установлен, но нужна перезагрузка Windows")
+    elif status == "denied":
+        print(f"  [!!] {_INSTALL_NPCAP} — нужны права администратора")
+    elif status == "cancelled":
+        print("  [!!] установка отменена")
+    else:
+        print(f"  [!!] Npcap: {result['message']}")
+
+
 def _install_words(only_check: bool) -> int:
     """Fetch the dictionaries. Returns the number that failed."""
     if only_check:
@@ -130,6 +165,9 @@ def main() -> int:
                              + ", ".join(installer.TOOLS))
     parser.add_argument("--check", action="store_true",
                         help="только показать состояние, ничего не качать")
+    parser.add_argument("--npcap", action="store_true",
+                        help="поставить Npcap с поддержкой raw 802.11 (нужны права "
+                             "администратора; окно установщика придётся подтвердить)")
     parser.add_argument("--force", action="store_true",
                         help="переустановить выбранное, даже если оно уже есть")
     args = parser.parse_args()
@@ -176,7 +214,10 @@ def main() -> int:
             print("\n  Без RockYou лестница остаётся на кандидатах по имени сети")
             print("  и масках. Скачать позже: uv run python tools/setup.py")
 
-    _rule("4. Рабочие папки")
+    _rule("4. Npcap (захват рукопожатия)")
+    _npcap_step(args.npcap)
+
+    _rule("5. Рабочие папки")
     _check_captures()
 
     _rule("Готово")

@@ -12,7 +12,7 @@ os.environ["WIFI_TOOL_NO_BOARD"] = "1"
 MODULES = ("tests.test_board_captures", "tests.test_secondary_ui",
            "tests.test_ui_focus", "tests.test_tui_setup", "tests.test_ui_context",
            "tests.test_ui_runtime", "tests.test_ui_redesign", "tests.test_ui_motion",
-           "tests.test_cracking", "tests.test_regressions")
+           "tests.test_cracking", "tests.test_regressions", "tests.test_npcap")
 
 
 def suite() -> unittest.TestSuite:
