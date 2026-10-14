@@ -32,8 +32,14 @@ assets/probable*.txt
 ui_artifacts/
 __pycache__/
 *.pyc
+
+# uv: окружение и кэш сборки. requirements.txt больше не нужен --
+# зависимости живут в pyproject.toml, фиксируются uv.lock.
+.venv/
 .pio/
 build/
+dist/
+*.egg-info/
 
 # Служебное.
 nul

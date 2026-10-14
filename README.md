@@ -11,14 +11,21 @@ PMKID/EAPOL-рукопожатие, конвертирует захват в ф�
 
 ## Установка
 
-Нужен Windows и Python 3.11+ (проверено на 3.13).
+Нужен Windows и [uv](https://docs.astral.sh/uv/) — он ставит и нужный Python,
+и зависимости, и не требует ничего глобального.
 
 ```powershell
 git clone https://github.com/falcxe/wifi-hack-tool.git
 cd wifi-hack-tool
-python -m pip install -r requirements.txt
-python main.py
+uv sync
+uv run wifi-tool
 ```
+
+`uv sync` создаёт `.venv` и ставит пакет в него. Дальше — `uv run wifi-tool`,
+либо `uv run python main.py`, либо активировать окружение раз и запускать
+`wifi-tool` напрямую. Требуется Python 3.12+ — столько просит `opentui`.
+
+Запуск без uv, если он недоступен: `pip install -e .` и `python main.py`.
 
 При первом запуске приложение попросит права администратора — без них
 сканирование работает, а захват нет. Автоматический режим всё равно проверит
@@ -27,12 +34,15 @@ python main.py
 
 ### Зависимости
 
+Всё живёт в `pyproject.toml` и фиксируется `uv.lock` — обновлять нужно оба.
+
 | Пакет | Без него |
 |---|---|
 | `opentui` | не запускается ни приложение, ни тесты |
 | `pyserial` | **плата не определяется**: `find_boards()` возвращает пустой список, пункт «Захваты с платы» в F1 всегда неактивен, стик не виден даже воткнутым |
 | `scapy` | «Отвалить клиентов» молча выключается, остальной захват работает |
 | `py7zr` | распаковка hashcat-архива средствами Python; при BCJ2 всё равно нужен `assets\7zr.exe` |
+| `pillow` | только для `tools/preview_motion.py`; в группе `dev`, ставится через `uv sync` |
 
 Про `pyserial` стоит знать отдельно: плата, которой нет в списке портов, почти
 всегда означает именно его отсутствие, а не проблему с USB.
@@ -197,22 +207,39 @@ Wireshark (`tshark -i <интерфейс> -I <канал> -a duration:120 -w ow
 
 ## Тесты
 
+Все тесты в `tests/`, запускаются как модули:
+
 ```powershell
-python _run_ui_tests.py   # весь интерфейс: 191 тест, без внешних инструментов
-python _test_parser.py    # разбор вывода netsh: RU/EN, обе кодировки, живой скан
-python _test_profiles.py  # чтение сохранённых профилей
-python _test_hc22000.py   # встроенный конвертер: 802.11 / radiotap / Ethernet
-python _test_groundtruth.py # сверка с wpawolf на реальных захватах
-python _test_auto.py      # автолестница: кандидаты, бюджет, реальный hashcat
-python _test_e2e.py       # полный цикл: захват -> hc22000 -> hashcat -> пароль
-python _test_smoke.py     # живой TUI: настоящий ввод и настоящий netsh
-python _preview.py --export ui_artifacts/frames   # headless-кадры в PNG
+uv run python -m tests.run_ui_tests    # весь интерфейс: 191 тест, без внешних инструментов
+uv run python -m tests.test_parser     # разбор вывода netsh: RU/EN, обе кодировки, живой скан
+uv run python -m tests.test_profiles   # чтение сохранённых профилей
+uv run python -m tests.test_hc22000    # встроенный конвертер: 802.11 / radiotap / Ethernet
+uv run python -m tests.test_groundtruth # сверка с wpawolf на реальных захватах
+uv run python -m tests.test_auto       # автолестница: кандидаты, бюджет, реальный hashcat
+uv run python -m tests.test_e2e        # полный цикл: захват -> hc22000 -> hashcat -> пароль
+uv run python -m tests.test_smoke      # живой TUI: настоящий ввод и настоящий netsh
 ```
 
-`_test_e2e.py` и `_test_auto.py` запускают настоящий hashcat по хэш-файлу,
+`tests.test_e2e` и `tests.test_auto` запускают настоящий hashcat по хэш-файлу,
 который произвёл конвертер этого проекта, и требуют, чтобы пароль `12345678`
 (задокументирован в имени фикстуры) был найден. Фикстуры лежат в
 `tests/fixtures/`.
+
+Отдельный модуль — `./tools/run_one.ps1 tests.test_ui` — прогоняет один модуль
+и печатает только строки с ошибками.
+
+## Инструменты разработчика
+
+В `tools/` лежат скрипты, которые не участвуют в работе приложения:
+
+```powershell
+uv run python tools/preview.py --export ui_artifacts/frames   # headless-кадры всех экранов в PNG
+uv run python tools/preview_motion.py                        # анимация в GIF из настоящих кадров
+uv run python tools/catch.py --crack                         # поймать рукопожатие платой и подобрать
+```
+
+`tools/catch.py` дублирует то, что делает TUI, но с обратным отсчётом и
+подсказками вслух — так видно, что делать с телефоном, пока идёт ожидание.
 
 ---
 
