@@ -5,5 +5,7 @@
   "rockyou_wpa_bytes": 104401920,
   "rockyou_wpa_sha256": "68379b1404203721cddd72df5471c5f424228caf3400792e0735e6ba62a42a63",
   "quick_source": "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Passwords/WiFi-WPA/probable-v2-wpa-top4800.txt",
-  "quick_candidates": 4800
+  "quick_candidates": 4800,
+  "quick_bytes": 45276,
+  "quick_sha256": "5dc33214cad9a11eb926de00f5ded20b1a5fc12ba3332319e054713265a35c51"
 }

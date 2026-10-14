@@ -92,7 +92,7 @@ def _install_words(only_check: bool) -> int:
             print("  [--] словарей нет")
         return 0
 
-    results = asyncio.run(installer.install_wordlists(on_log=lambda line: print(f"  {line}")))
+    results = installer.install_wordlists(on_log=lambda line: print(f"  {line}"))
     failed = 0
     for key, outcome in results.items():
         title = "RockYou WPA" if key == "rockyou" else "частые пароли"

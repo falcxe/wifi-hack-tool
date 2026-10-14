@@ -34,6 +34,21 @@ WORDLIST_NAMES = (
     "rockyou-wpa.txt", "rockyou.txt", "wordlist.txt", "passwords.txt", "cracked.txt",
 )
 
+#: Names that count as *RockYou*, i.e. the 9.6M-candidate list specifically.
+#:
+#: Needed because ``wordlist.txt`` is in WORDLIST_NAMES and the repository
+#: ships a 136-line file under that name as a test fixture. Asking
+#: ``find_wordlist()`` whether RockYou is present therefore answered "yes" on a
+#: clean clone, and the installer skipped a 53 MB download that the ladder
+#: genuinely needed -- leaving it with a 136-line dictionary and nothing else.
+ROCKYOU_NAMES = ("rockyou-wpa.txt", "rockyou.txt")
+
+#: A dictionary smaller than this is not one: below it, ``wordlist.txt`` and a
+#: real list become indistinguishable, and the ladder would plan a stage that
+#: cannot find anything while reporting the dictionary as present. RockYou is
+#: ~100 MB, the quick list 45 KB, and even a personal list runs to megabytes.
+MIN_DICTIONARY_BYTES = 1 << 20
+
 #: The small high-yield list, if the project ships it.
 QUICK_WORDLIST_NAMES = ("probable-wpa.txt", "probable-v2-wpa-top4800.txt")
 
@@ -43,12 +58,31 @@ QUICK_WORDLIST_NAMES = ("probable-wpa.txt", "probable-v2-wpa-top4800.txt")
 EXTRA_WORDLIST_NAMES = ("wpa-extra.txt",)
 
 
-def find_wordlist(directory: Path | None = None) -> Path | None:
-    """The first known dictionary present in ``directory`` (default assets/)."""
+def find_wordlist(directory: Path | None = None, *, min_bytes: int = 0) -> Path | None:
+    """The first known dictionary present in ``directory`` (default assets/).
+
+    ``min_bytes`` rejects files too small to be a real dictionary. Off by
+    default, because for "is there anything to work with" any file answers the
+    question -- but callers that specifically want RockYou pass it and get the
+    136-line test fixture skipped.
+    """
     base = directory or ASSETS_DIR
     for name in WORDLIST_NAMES:
         candidate = base / name
-        if candidate.is_file():
+        if not candidate.is_file():
+            continue
+        if min_bytes and candidate.stat().st_size < min_bytes:
+            continue
+        return candidate
+    return None
+
+
+def find_rockyou(directory: Path | None = None) -> Path | None:
+    """RockYou specifically, ignoring other dictionaries and small files."""
+    base = directory or ASSETS_DIR
+    for name in ROCKYOU_NAMES:
+        candidate = base / name
+        if candidate.is_file() and candidate.stat().st_size >= MIN_DICTIONARY_BYTES:
             return candidate
     return None
 

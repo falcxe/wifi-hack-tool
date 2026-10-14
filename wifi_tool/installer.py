@@ -154,7 +154,15 @@ def _download(
     sha256: str,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> Path:
-    """Stream ``url`` to ``dest``; delete the file unless the digest matches."""
+    """Stream ``url`` to ``dest``; delete the file unless the digest matches.
+
+    An empty ``sha256`` means the caller has no digest recorded and the download
+    is not verified -- but it is *not* compared against "" and reported as a
+    mismatch, which is what an unguarded comparison does. Callers that do have a
+    digest (every tool here) always pass one; the RockYou archive is the one
+    case where the digest covers the *filtered* file rather than the archive,
+    so it is verified after filtering instead.
+    """
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
@@ -174,7 +182,7 @@ def _download(
         raise InstallError(f"не удалось скачать {url}: {exc}") from exc
 
     actual = _sha256(dest)
-    if actual != sha256:
+    if sha256 and actual != sha256:
         dest.unlink(missing_ok=True)
         raise InstallError(
             "контрольная сумма не совпала, файл удалён\n"
@@ -463,13 +471,29 @@ def _wordlist_info() -> dict:
 
 
 def installed_wordlists() -> dict[str, Path]:
-    """The dictionaries present in assets/, by role."""
+    """The dictionaries present in assets/, by role.
+
+    RockYou is looked up by name and size rather than through the generic
+    dictionary finder: ``assets/wordlist.txt`` is a 136-line test fixture that
+    the repository ships, and reporting it as RockYou hides the fact that the
+    real list is missing.
+    """
     from .options import find_extra_wordlist, find_quick_wordlist, find_wordlist
 
-    found = {"RockYou": find_wordlist(ASSETS_DIR),
-             "частые пароли": find_quick_wordlist(ASSETS_DIR),
-             "доп. словарь": find_extra_wordlist(ASSETS_DIR)}
-    return {name: path for name, path in found.items() if path is not None}
+    found: dict[str, Path] = {}
+    rockyou = find_rockyou(ASSETS_DIR)
+    if rockyou is not None:
+        found["RockYou"] = rockyou
+    quick = find_quick_wordlist(ASSETS_DIR)
+    if quick is not None:
+        found["частые пароли"] = quick
+    extra = find_extra_wordlist(ASSETS_DIR)
+    if extra is not None:
+        found["доп. словарь"] = extra
+    other = find_wordlist(ASSETS_DIR)
+    if other is not None and other != rockyou:
+        found["свой словарь"] = other
+    return found
 
 
 def _filter_wpa(source: Path, dest: Path) -> int:
@@ -506,7 +530,7 @@ def install_wordlists(
     info = _wordlist_info()
     results: dict[str, str] = {}
 
-    from .options import find_quick_wordlist, find_wordlist
+    from .options import find_quick_wordlist, find_rockyou
 
     quick = find_quick_wordlist(ASSETS_DIR)
     if quick is not None:
@@ -535,7 +559,7 @@ def install_wordlists(
         finally:
             tmp.unlink(missing_ok=True)
 
-    rockyou = find_wordlist(ASSETS_DIR)
+    rockyou = find_rockyou(ASSETS_DIR)
     if rockyou is not None:
         log(f"RockYou WPA: уже есть ({rockyou.name})")
         results["rockyou"] = "ok"
