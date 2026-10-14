@@ -125,8 +125,9 @@ uv run python -c "from wifi_tool import bruce; print(bruce.available(), bruce.fi
 | 3 | кандидаты по имени и MAC | SSID, MAC, заводские пароли + цифры |
 | 4 | частые пароли | probable-wpa.txt, 4 800 |
 | 5 | RockYou WPA | rockyou-wpa.txt, 9,6 млн |
-| 6 | RockYou + мутации | best66.rule, ~620 млн |
-| 7–8 | цифры 8–9 | маски `?d…`, 10⁸ / 10⁹ |
+| 6 | словари без RockYou | wpa-extra.txt, 680 тыс. — если собран |
+| 7 | RockYou + мутации | best66.rule, ~620 млн |
+| 8–9 | цифры 8–9 | маски `?d…`, 10⁸ / 10⁹ |
 
 Полный проход ≈ 42 минуты на 684,5 kH/s. План печатается в журнал до старта,
 **Esc** открывает окно остановки.
@@ -134,6 +135,34 @@ uv run python -c "from wifi_tool import bruce; print(bruce.available(), bruce.fi
 Метода, дающего 100 %, у WPA2 нет — это следствие самого PBKDF2. Если пароль
 случайная строка из 16 символов, её нет ни в одном из этапов, и результат будет
 «не найден».
+
+### Свой словарь поверх RockYou
+
+RockYou закрывает массовые пароли, но в нём нет ничего, что человек придумал
+сам: `anna2019`, `kirill_777`, даты рождения, игровые ники. Словарь из
+утечек других сервисов такие строки содержит — и, главное, содержит **числовые
+пароли, которые маски потом перебирают вслепую**.
+
+```powershell
+uv run python tools/build_extra_wordlist.py --source-dir "C:\путь\к\словарям"
+```
+
+Скрипт берёт `AuthMe_top.txt`, `psq.txt`, `notpull.txt`, `dict.txt` (любые
+ txt подойдут — передаются путями), оставляет длину 8–63 байта, вычитает всё,
+что уже есть в RockYou, и пишет `assets/wpa-extra.txt`. Лестница подхватывает
+его сама и ставит **перед** масками.
+
+На замере 14 октября 2026 из 2,2 млн строк получилось 682 595 кандидата, которых
+в RockYou нет, в том числе **14 391 девятизначное число** и **52 125
+восьмизначных**. Маска на 9 цифр — это миллиард кандидатов и 24 минуты; список
+проходит тот же участок за секунды, а маска остаётся на то, чего в списке нет.
+
+Словарь в репозитории не лежит: он собирается из чужих файлов, которые нужно
+иметь у себя, и весит 3 МБ. Скрипт — воспроизводимая сборка.
+
+`uv run python tools/show_ladder.py` показывает текущий порядок этапов с
+оценкой секунд. `tools/verify_extra_stage.py` проверяет этап настоящим hashcat
+и печатает, во сколько раз он быстрее масок.
 
 ---
 
@@ -253,6 +282,9 @@ uv run python -m tests.test_smoke      # живой TUI: настоящий вв
 
 ```powershell
 uv run python tools/setup.py --check        # состояние установки, ничего не качает
+uv run python tools/build_extra_wordlist.py --source-dir ПАПКА  # собрать свой словарь
+uv run python tools/show_ladder.py          # порядок этапов и оценка секунд
+uv run python tools/verify_extra_stage.py   # замер этапа настоящим hashcat
 uv run python tools/preview.py --export ui_artifacts/frames   # headless-кадры всех экранов в PNG
 uv run python tools/preview_motion.py                        # анимация в GIF из настоящих кадров
 uv run python tools/catch.py --crack                         # поймать рукопожатие платой и подобрать

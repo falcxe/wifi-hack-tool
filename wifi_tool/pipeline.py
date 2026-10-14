@@ -17,7 +17,7 @@ from . import auto, capturer, converter, cracker, deauth, hc22000
 from .assets import is_admin
 from .capturer import Backend, Interface
 from .models import CrackResult, Network
-from .options import find_quick_wordlist, find_wordlist
+from .options import find_extra_wordlist, find_quick_wordlist, find_wordlist
 from .scanner import AdapterInfo, ScanError, detect_adapter, scan
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -912,6 +912,7 @@ async def auto_attack(
         quick=_quick_wordlist(),
         rockyou=Path(wordlist) if wordlist else r.wordlist,
         rules=Path(rules) if rules else r.rules,
+        extra=find_extra_wordlist(ASSETS_DIR),
         masks=(mask,) if mask else (),
     )
     if not stages:

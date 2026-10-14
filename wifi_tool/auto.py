@@ -287,6 +287,7 @@ def build_ladder(
     quick: str | Path | None = None,
     rockyou: str | Path | None = None,
     rules: str | Path | None = None,
+    extra: str | Path | None = None,
     digit_masks: Sequence[str] = DIGIT_MASKS,
     masks: Sequence[str] = (),
 ) -> List[Stage]:
@@ -297,6 +298,13 @@ def build_ladder(
     password looks like, which beats a guess that the password is all digits,
     and the default digit masks would otherwise run first and spend the budget
     the user's own format needed.
+
+    ``extra`` is a prepared list of passwords that no shipped dictionary has.
+    It runs right before the digit masks, for the same reason it is worth
+    anything at all: the masks brute-force all-digit passwords blind, and this
+    list already knows 66k of the ones that exist in the wild -- the nine-digit
+    mask is a billion candidates and a quarter of an hour, and this file covers
+    the realistic part of that ground in about a second.
     """
     stages: List[Stage] = []
 
@@ -330,6 +338,19 @@ def build_ladder(
         stages.append(Stage("quick", "частые пароли (4800)", quick_path))
     if (rockyou_path := path(rockyou)) is not None:
         stages.append(Stage("rockyou", "RockYou WPA", rockyou_path))
+    # Ahead of the mutation stage, not after it. That stage is ~620M candidates
+    # and about fifteen minutes; this one is 672k and about a second. Paying
+    # stages in order of likelihood means a password this list can answer is
+    # found in a second instead of after a quarter of an hour spent mutating
+    # words that were never going to match.
+    if (extra_path := path(extra)) is not None:
+        stages.append(
+            Stage(
+                "extra",
+                f"словари без RockYou ({extra_path.name})",
+                extra_path,
+            )
+        )
     # A mask the user described outranks every dictionary and runs before the
     # mutation stage: best66 over RockYou is ~620M candidates, about ten minutes
     # of the budget, and it is the one stage a specific format can beat.
@@ -345,9 +366,19 @@ def build_ladder(
                     rules_path,
                 )
             )
+    # Last, and only because the masks are exhaustive: they will find every
+    # all-digit password of this length whether or not anybody has ever typed
+    # it. The extra list above already tried the ones that are real.
     for mask in digit_masks:
         stages.append(Stage("digits", f"цифры: {mask}", mask=mask))
     return stages
+
+
+#: Where the "passwords no shipped dictionary has" list is looked for. Kept out
+#: of ``WORDLIST_NAMES`` on purpose: that tuple answers "is there a dictionary to
+#: work with", and this file is an addition to it, not a replacement. A user
+#: with only rockyou-wpa.txt must not be told a dictionary is missing.
+#: The names themselves live in ``options`` with the other asset lookups.
 
 
 #: hashcat needs ~2.5 s of session start-up (loading OpenCL, reading the potfile)

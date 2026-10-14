@@ -37,6 +37,11 @@ WORDLIST_NAMES = (
 #: The small high-yield list, if the project ships it.
 QUICK_WORDLIST_NAMES = ("probable-wpa.txt", "probable-v2-wpa-top4800.txt")
 
+#: Names of the optional supplementary list built by
+#: ``tools/build_extra_wordlist.py``. Declared here rather than in auto.py so the
+#: options module stays the single place that knows what files live in assets/.
+EXTRA_WORDLIST_NAMES = ("wpa-extra.txt",)
+
 
 def find_wordlist(directory: Path | None = None) -> Path | None:
     """The first known dictionary present in ``directory`` (default assets/)."""
@@ -52,6 +57,21 @@ def find_quick_wordlist(directory: Path | None = None) -> Path | None:
     """The small high-yield dictionary, if it is on disk."""
     base = directory or ASSETS_DIR
     for name in QUICK_WORDLIST_NAMES:
+        candidate = base / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def find_extra_wordlist(directory: Path | None = None) -> Path | None:
+    """The supplementary list, if the user built one.
+
+    Optional by construction: ``tools/build_extra_wordlist.py`` produces it from
+    wordlists the user already has, so most installs will not have it and the
+    ladder must run without it. Never reported as "a dictionary is missing".
+    """
+    base = directory or ASSETS_DIR
+    for name in EXTRA_WORDLIST_NAMES:
         candidate = base / name
         if candidate.is_file():
             return candidate

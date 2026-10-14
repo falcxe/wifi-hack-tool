@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from wifi_tool import auto, converter, cracker, pipeline, profiles  # noqa: E402
+from wifi_tool import auto, converter, cracker, options, pipeline, profiles  # noqa: E402
 from wifi_tool.models import CrackResult, Network  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -90,6 +90,11 @@ class CandidateTests(unittest.TestCase):
 
 
 class CostingTests(unittest.TestCase):
+    def setUp(self):
+        self._empty = tempfile.TemporaryDirectory()
+        self.addCleanup(self._empty.cleanup)
+        self._empty_dir = Path(self._empty.name)
+
     def test_mask_cost_is_exact(self):
         eight = auto.Stage("digits", "8", mask="?d?d?d?d?d?d?d?d")
         nine = auto.Stage("digits", "9", mask="?d?d?d?d?d?d?d?d?d")
@@ -145,6 +150,74 @@ class CostingTests(unittest.TestCase):
         mutated = stages[1]
         self.assertEqual(mutated.rules, rules)
         self.assertGreater(mutated.candidates(), stages[0].candidates() * 50)
+
+    def test_extra_runs_before_the_mutations_that_cost_fifteen_minutes(self):
+        """A one-second stage must not queue behind a fifteen-minute one.
+
+        The point of the extra wordlist is that it knows tens of thousands of
+        the all-digit passwords the digit masks would otherwise brute-force
+        blind. Placing it after ``mutations`` (~620M candidates) would spend
+        the whole budget on words that were never going to match before trying
+        the ones that could.
+        """
+        rules = ROOT / "assets" / "hashcat-7.1.2" / "rules" / "best66.rule"
+        stages = auto.build_ladder(
+            quick=ASSETS / "probable-wpa.txt",
+            rockyou=ASSETS / "rockyou-wpa.txt",
+            rules=rules,
+            extra=ASSETS / "wpa-extra.txt",
+        )
+        keys = [s.key for s in stages]
+        self.assertIn("extra", keys)
+        self.assertLess(keys.index("extra"), keys.index("mutations"))
+        self.assertLess(keys.index("extra"), keys.index("digits"))
+
+    def test_extra_runs_before_the_digit_masks_it_replaces(self):
+        """The masks are exhaustive and blind; the list is neither.
+
+        66k known all-digit passwords against a billion blind candidates: the
+        list answers the same question first, and only a password nobody has
+        ever typed is left for the mask.
+        """
+        stages = auto.build_ladder(extra=ASSETS / "wpa-extra.txt")
+        keys = [s.key for s in stages]
+        self.assertEqual(keys, ["extra", "digits", "digits"])
+
+    def test_the_ladder_still_runs_without_the_optional_list(self):
+        """Most installs will not have it, and that must not be an error.
+
+        The file is built by a script from wordlists the user has to already
+        own, so its absence is the normal case rather than a broken install.
+        """
+        stages = auto.build_ladder(
+            quick=ASSETS / "probable-wpa.txt",
+            rockyou=ASSETS / "rockyou-wpa.txt",
+        )
+        self.assertNotIn("extra", [s.key for s in stages])
+
+    def test_a_missing_extra_file_is_skipped_not_raised(self):
+        stages = auto.build_ladder(extra=ASSETS / "no-such-extra.txt")
+        self.assertNotIn("extra", [s.key for s in stages])
+
+    def test_the_extra_file_is_not_the_primary_dictionary(self):
+        """Having it must not change what "a dictionary is present" means.
+
+        WORDLIST_NAMES answers whether there is anything to work with at all.
+        The extra file is an addition to rockyou, so a user who has only
+        rockyou must still be told their dictionary was found.
+        """
+        names = set(options.WORDLIST_NAMES)
+        for name in options.EXTRA_WORDLIST_NAMES:
+            self.assertNotIn(name, names)
+        # An empty directory finds neither: "no dictionary" and "no extra
+        # list" are separate answers, and a machine with rockyou alone must
+        # read as having a dictionary.
+        self.assertIsNone(options.find_wordlist(self._empty_dir))
+        self.assertIsNone(options.find_extra_wordlist(self._empty_dir))
+
+    def test_extra_wordlist_lookup_finds_the_file_when_present(self):
+        found = options.find_extra_wordlist(ROOT / "assets")
+        self.assertEqual(found, ASSETS / "wpa-extra.txt")
 
     def test_speed_parsing(self):
         self.assertEqual(
@@ -578,7 +651,16 @@ class AutoAttackTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(plan, f"no plan was logged:\n{chr(10).join(lines)}")
         self.assertIn("кандидаты по имени и MAC сети", plan[0])
         self.assertTrue(any("Этап 1/" in line for line in lines), lines)
-        self.assertEqual(stages[0], "1/7")
+        # Read the total out of the plan instead of hardcoding "1/7": the
+        # ladder gains a stage when the optional supplementary wordlist is
+        # present on the machine, and a fixed number would fail there for a
+        # reason unrelated to this test. What matters is that the plan printed
+        # before the run and the run itself agree on how many stages there are.
+        announced = next((line for line in lines if line.startswith("План: ")), "")
+        total = int(announced.split()[1])
+        self.assertEqual(len(stages), total)
+        for index, seen in enumerate(stages):
+            self.assertEqual(seen, f"{index + 1}/{total}")
 
     @unittest.skipUnless(FIXTURE.is_file(), "фикстура отсутствует")
     async def test_real_hashcat_recovers_the_password_from_the_first_stage(self):

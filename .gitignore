@@ -28,6 +28,10 @@ assets/rockyou*.txt
 # Крупные словари -- по ссылке в assets/wordlists-info.json.
 assets/probable*.txt
 
+# Собирается из чужих словарей скриптом tools/build_extra_wordlist.py, поэтому
+# в репозитории его нет: воспроизводится одной командой там, где есть исходники.
+assets/wpa-extra.txt
+
 # Сгенерированные превью и артефакты сборки.
 ui_artifacts/
 __pycache__/
