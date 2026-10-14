@@ -12,43 +12,67 @@ PMKID/EAPOL-рукопожатие, конвертирует захват в ф�
 ## Установка
 
 Нужен Windows и [uv](https://docs.astral.sh/uv/) — он ставит и нужный Python,
-и зависимости, и не требует ничего глобального.
+и зависимости, и не требует ничего глобального. Требуется Python 3.12+,
+столько просит `opentui`.
 
 ```powershell
 git clone https://github.com/falcxe/wifi-hack-tool.git
 cd wifi-hack-tool
-uv sync
+uv sync                          # Python-пакеты
+uv run python tools/setup.py     # hashcat и wpawolf
 uv run wifi-tool
 ```
 
-`uv sync` создаёт `.venv` и ставит пакет в него. Дальше — `uv run wifi-tool`,
-либо `uv run python main.py`, либо активировать окружение раз и запускать
-`wifi-tool` напрямую. Требуется Python 3.12+ — столько просит `opentui`.
+`tools/setup.py` — та самая вторая команда. Она нужна потому, что **hashcat и
+wpawolf приезжают не через uv**: это бинарники под Windows, Python-пакета у них
+нет, и резолвер их не привезёт ни при каких флагах. Скрипт скачивает их с
+GitHub, сверяет SHA-256 и распаковывает в `assets/`.
 
-Запуск без uv, если он недоступен: `pip install -e .` и `python main.py`.
+Итого после трёх команд машина готова к подбору. Повторный запуск безопасен —
+уже установленное пропускается, а `--check` только показывает состояние:
+
+```powershell
+uv run python tools/setup.py --check
+uv run python tools/setup.py --only hashcat --force    # переставить один
+```
 
 При первом запуске приложение попросит права администратора — без них
 сканирование работает, а захват нет. Автоматический режим всё равно проверит
 сохранённые ключи и честно скажет, что не хватает. Чтобы не повышать права
 (например, при работе с готовым файлом захвата): `--no-elevate`.
 
+Запуск без uv: `pip install -e .`, затем `python tools/setup.py` и
+`python main.py`.
+
 ### Зависимости
 
-Всё живёт в `pyproject.toml` и фиксируется `uv.lock` — обновлять нужно оба.
+Python-пакеты живут в `pyproject.toml` и фиксируются `uv.lock` — обновлять
+нужно оба.
 
 | Пакет | Без него |
 |---|---|
 | `opentui` | не запускается ни приложение, ни тесты |
 | `pyserial` | **плата не определяется**: `find_boards()` возвращает пустой список, пункт «Захваты с платы» в F1 всегда неактивен, стик не виден даже воткнутым |
 | `scapy` | «Отвалить клиентов» молча выключается, остальной захват работает |
-| `py7zr` | распаковка hashcat-архива средствами Python; при BCJ2 всё равно нужен `assets\7zr.exe` |
+| `py7zr` | распаковка hashcat-архива средствами Python; сам архив BCJ2 и его не берёт — распаковывает `assets\7zr.exe` |
 | `pillow` | только для `tools/preview_motion.py`; в группе `dev`, ставится через `uv sync` |
+
+Внешние программы, которых нет в pip, ставит `tools/setup.py`:
+
+| Программа | Зачем | Откуда |
+|---|---|---|
+| hashcat 7.1.2 | подбор пароля | GitHub Releases, SHA-256 сверяется при скачивании |
+| wpawolf 1.3.0 | конвертер хэшей, заменяет `hcxpcapngtool` | там же |
+
+Обе распаковываются в `assets/` и находятся приложением сами. `tshark`
+(`netcap80211`) ставится отдельно и нужен только для захвата рукопожатия —
+`tools/setup.py` его не трогает, потому что ему нужен установленный Npcap.
 
 Про `pyserial` стоит знать отдельно: плата, которой нет в списке портов, почти
 всегда означает именно его отсутствие, а не проблему с USB.
 
 ```powershell
-python -c "from wifi_tool import bruce; print(bruce.available(), bruce.find_boards())"
+uv run python -c "from wifi_tool import bruce; print(bruce.available(), bruce.find_boards())"
 ```
 
 `False` в первом месте — не установлен `pyserial`. Пустой список при `True` —
@@ -119,23 +143,18 @@ python -c "from wifi_tool import bruce; print(bruce.available(), bruce.find_boar
 
 | Файл | Зачем | Как поставить |
 |---|---|---|
-| `hashcat.exe` | подбор пароля | распакуй официальный архив — путь `hashcat-<версия>/hashcat.exe` находится сам |
-| `rockyou-wpa.txt` / `probable-wpa.txt` | словари | выбираются в TUI; источники — [RockYou](https://github.com/danielmiessler/SecLists/blob/master/Passwords/Leaked-Databases/rockyou.txt.tar.gz) и [Probable WPA](https://github.com/danielmiessler/SecLists/blob/master/Passwords/WiFi-WPA/probable-v2-wpa-top4800.txt) |
+| `hashcat-<версия>/` | подбор пароля | `uv run python tools/setup.py` |
+| `wpawolf.exe` | конвертер хэшей | там же |
 | `netcap80211.exe` или `tshark.exe` | захват рукопожатия | см. «Захват» ниже |
-| `wpawolf.exe` | конвертер хэшей | автоматически, клавишей **D** на экране настройки и подбора |
+| `rockyou-wpa.txt` / `probable-wpa.txt` | словари | выбираются в TUI; источники — [RockYou](https://github.com/danielmiessler/SecLists/blob/master/Passwords/Leaked-Databases/rockyou.txt.tar.gz) и [Probable WPA](https://github.com/danielmiessler/SecLists/blob/master/Passwords/WiFi-WPA/probable-v2-wpa-top4800.txt) |
+
+Hashcat занимает не один файл, а папку целиком: его модули `OpenCL/`,
+`modules/`, `kernels/` и `rules/` ищутся относительно самого `hashcat.exe`, и
+одинокая копия без дерева не запускается вообще. Поэтому `setup.py` кладёт
+разобранный архив как есть и никогда не вытаскивает `.exe` наверх.
 
 Правила мутаций (`best66.rule`) берутся из поставки hashcat, если не положить
 свои в `assets/rules/`.
-
-### Распаковка hashcat
-
-Архив `.7z` может использовать BCJ2, которое не понимает `py7zr`. Нужен
-настоящий 7-Zip — один файл, без установки:
-
-```powershell
-curl -o assets/7zr.exe https://www.7-zip.org/a/7zr.exe
-assets\7zr.exe x -y -oassets Downloads\hashcat-7.1.2.7z
-```
 
 ---
 
@@ -164,7 +183,7 @@ Windows обычно отдаёт программе обычные данные
 Разбери уже готовый файл — права администратора не нужны:
 
 ```powershell
-python main.py --file path/to/capture.pcapng
+uv run wifi-tool --file path/to/capture.pcapng
 ```
 
 Поддерживаются `.pcap`, `.pcapng` и `.22000`. Файл можно получить через
@@ -230,13 +249,17 @@ uv run python -m tests.test_smoke      # живой TUI: настоящий вв
 
 ## Инструменты разработчика
 
-В `tools/` лежат скрипты, которые не участвуют в работе приложения:
+В `tools/` лежат скрипты:
 
 ```powershell
+uv run python tools/setup.py --check        # состояние установки, ничего не качает
 uv run python tools/preview.py --export ui_artifacts/frames   # headless-кадры всех экранов в PNG
 uv run python tools/preview_motion.py                        # анимация в GIF из настоящих кадров
 uv run python tools/catch.py --crack                         # поймать рукопожатие платой и подобрать
 ```
+
+`tools/setup.py` — единственный, нужен не разработчику: это вторая часть
+установки из раздела выше.
 
 `tools/catch.py` дублирует то, что делает TUI, но с обратным отсчётом и
 подсказками вслух — так видно, что делать с телефоном, пока идёт ожидание.

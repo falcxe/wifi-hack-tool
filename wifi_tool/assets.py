@@ -49,8 +49,15 @@ def _find(name: str, exts: tuple[str, ...] = ()) -> Path | None:
 
 
 def load_assets() -> Assets:
+    # hashcat comes from ``cracker.find_hashcat()``, not from _find(): a bare
+    # _find("hashcat") only ever matched assets/hashcat.exe and so reported no
+    # hashcat on a machine where the official archive unpacked into
+    # assets/hashcat-<version>/ -- which is the normal case. Two finders for one
+    # tool disagreed, and the wrong answer was the one a caller acted on.
+    from .cracker import find_hashcat
+
     return Assets(
-        hashcat=_find("hashcat", (".exe", "")),
+        hashcat=find_hashcat(),
         cap80211=_find("cap80211", (".exe", "")),
         wordlist=_find("wordlist", (".txt", ".lst", "")),
     )

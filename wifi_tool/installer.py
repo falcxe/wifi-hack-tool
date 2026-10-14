@@ -9,9 +9,11 @@ Verified sources (GitHub release API, read during development):
 * hashcat  v7.1.2 -- single ``.7z`` archive, sha256 recorded below.
 * WPAWolf v1.3.0  -- standalone Windows ``.exe``, sha256 recorded below.
 
-hashcat ships only a 7-Zip archive, so extraction needs either ``py7zr`` (pip) or
-an existing 7-Zip/7za binary. Without one of those the archive is kept in
-``assets/`` and the user is told the exact command to run; the tool stays usable.
+hashcat ships only a 7-Zip archive, and that archive is BCJ2-compressed --
+``py7zr`` refuses it. So extraction goes through the ``7zr.exe`` the project
+ships in ``assets/``, and ``py7zr`` is only the fallback for archives that do
+happen to be plain. Without any extractor the archive is kept in ``assets/`` and
+the user is told the exact command to run; the tool stays usable.
 """
 from __future__ import annotations
 
@@ -77,12 +79,19 @@ TOOLS: dict[str, Tool] = {
     "hashcat": Tool(
         key="hashcat",
         title="hashcat (подбор пароля)",
-        auto=False,
-        kind="archive",
+        url=(
+            "https://github.com/hashcat/hashcat/releases/download/"
+            "v7.1.2/hashcat-7.1.2.7z"
+        ),
+        # Verified twice on 2026-10-14: read from the GitHub release API's own
+        # `digest` field, then confirmed against the downloaded bytes.
+        sha256="80db0316387794ce9d14ed376da75b8a7742972485b45db790f5f8260307ff98",
+        filename="hashcat-7.1.2.7z",
         # The whole extracted folder, not the exe: hashcat cannot start without
         # the OpenCL/modules/kernels tree beside it.
         installed_name="hashcat",
-        note="официальной Windows-сборки на GitHub нет",
+        kind="archive",
+        note="BCJ2: распаковывает assets\\7zr.exe, py7zr этот архив не берёт",
         manual=(
             "hashcat -> hashcat.net/forum, скачай Windows-пакет и распакуй 7-Zip.\n"
             "  Папку целиком (hashcat.exe вместе с OpenCL/, modules/, kernels/,\n"
@@ -201,7 +210,15 @@ def find_7z() -> Optional[Path]:
 def _extract_7z(archive: Path, dest: Path) -> Optional[Path]:
     """Extract ``archive`` into ``dest``; return the installed exe or None.
 
-    Tries ``py7zr`` first (pure pip install), then an external 7-Zip binary.
+    ``py7zr`` first (it is already a dependency, so this path needs no external
+    binary), then the 7z in ``assets/`` or on PATH.
+
+    A py7zr *failure* falls through to 7z instead of raising: hashcat's archive
+    is BCJ2-compressed, which py7zr refuses outright
+    (``UnsupportedCompressionMethodError``), and that is the expected outcome on
+    a perfectly good machine. Raising there skipped the 7z fallback that actually
+    works and turned every automatic install into "нечем распаковать .7z" while
+    a working ``assets/7zr.exe`` sat in the very folder being written to.
     """
     dest.mkdir(parents=True, exist_ok=True)
     try:
@@ -209,11 +226,15 @@ def _extract_7z(archive: Path, dest: Path) -> Optional[Path]:
 
         with py7zr.SevenZipFile(archive, mode="r") as zf:
             zf.extractall(path=dest)
-        return _locate_hashcat(dest)
+        found = _locate_hashcat(dest)
+        if found:
+            return found
     except ImportError:
         pass
-    except Exception as exc:  # noqa: BLE001
-        raise InstallError(f"не удалось распаковать (py7zr): {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 - 7z below is the real answer
+        shutil.rmtree(dest, ignore_errors=True)
+        dest.mkdir(parents=True, exist_ok=True)
+        print(f"  py7zr не справился ({type(exc).__name__}), пробую 7z...")
 
     exe = find_7z()
     if exe is None:
@@ -224,10 +245,12 @@ def _extract_7z(archive: Path, dest: Path) -> Optional[Path]:
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=300,
+        timeout=600,
     )
     if proc.returncode != 0:
-        raise InstallError(f"7z вернул код {proc.returncode}: {(proc.stderr or '').strip()[:200]}")
+        raise InstallError(
+            f"7z вернул код {proc.returncode}: {(proc.stderr or '').strip()[:200]}"
+        )
     return _locate_hashcat(dest)
 
 
