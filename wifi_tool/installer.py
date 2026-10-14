@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
@@ -182,12 +183,53 @@ def _download(
     return dest
 
 
+#: Shown when an install fails: the exact command to retry with, rather than a
+#: ``pip install`` the uv-based setup does not use.
+_INSTALL_HINT = "uv run python tools/setup.py"
+
+#: The standalone 7zr console binary. Fetched rather than committed: a 600 KB
+#: third-party executable in the repository is a licence and a size argument
+#: forever. Public domain, straight from 7-zip.org.
+SEVENZIP_URL = "https://www.7-zip.org/a/7zr.exe"
+SEVENZIP_SHA256 = "256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282"
+
+
+def ensure_7z(
+    *, on_log: Optional[Callable[[str], None]] = None
+) -> Optional[Path]:
+    """Return a working extractor for hashcat's archive, downloading one if needed.
+
+    Without this the automatic install could not finish on a fresh clone: hashcat
+    ships BCJ2-compressed, py7zr refuses it outright, and the 7z that used to sit
+    in assets/ is not in the repository. A clean checkout therefore had no
+    extractor at all, and the install died with "нечем распаковать .7z" while
+    telling the user to check that file, which was never there.
+    """
+    log = on_log or (lambda _line: None)
+    found = find_7z()
+    if found is not None:
+        return found
+
+    local = ASSETS_DIR / "7zr.exe"
+    log("Extractor for .7z: downloading 7zr.exe from 7-zip.org...")
+    try:
+        ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+        _download(SEVENZIP_URL, local, SEVENZIP_SHA256)
+    except InstallError as exc:
+        log(f"  failed: {exc}")
+        log("  install 7-Zip manually: https://www.7-zip.org")
+        return None
+    log("  7zr.exe: checksum OK")
+    return local if local.exists() else None
+
+
 def find_7z() -> Optional[Path]:
     """Locate a 7-Zip / 7za / 7zr binary for unpacking hashcat's archive.
 
-    assets/ is checked first: the project ships a standalone ``7zr.exe`` there,
-    and telling the user to ``pip install py7zr`` while a working extractor sits
-    in the same folder is the kind of advice that costs an afternoon.
+    assets/ is checked first, then PATH, then the two places 7-Zip installs
+    itself into. Deliberately a pure lookup -- a caller that only wants to know
+    what is available should not be surprised by a download; see
+    :func:`ensure_7z` for that.
     """
     for name in ("7z.exe", "7za.exe", "7zr.exe"):
         local = ASSETS_DIR / name
@@ -236,7 +278,7 @@ def _extract_7z(archive: Path, dest: Path) -> Optional[Path]:
         dest.mkdir(parents=True, exist_ok=True)
         print(f"  py7zr не справился ({type(exc).__name__}), пробую 7z...")
 
-    exe = find_7z()
+    exe = ensure_7z()
     if exe is None:
         return None
     proc = subprocess.run(
@@ -321,10 +363,9 @@ def install(
                 raise InstallError(
                     f"{tool.title}: нечем распаковать .7z\n"
                     f"  архив сохранён: {kept}\n"
-                    "  в папке assets уже лежит 7zr.exe — проверь, что он на месте,\n"
-                    "  либо поставь 7-Zip (https://7-zip.org) или выполни:\n"
-                    "    python -m pip install py7zr\n"
-                    "  и запусти настройку ещё раз."
+                    "  распаковщик не нашёлся и скачать его не удалось —\n"
+                    "  поставь 7-Zip вручную: https://www.7-zip.org\n"
+                    f"  и запусти настройку ещё раз: {_INSTALL_HINT}"
                 )
             unpacked_root = _archive_root(exe)
             final_root = ASSETS_DIR / unpacked_root.name
@@ -387,3 +428,155 @@ def summary() -> str:
     if not done:
         return "ничего не установлено"
     return "установлено: " + ", ".join(t.title.split(" (")[0] for t in done)
+
+
+# --------------------------------------------------------------------------
+# Dictionaries
+# --------------------------------------------------------------------------
+#
+# Not part of TOOLS: these are not single downloaded binaries but a filter run
+# over a 53 MB archive, so they need their own step. They are also the two
+# stages that matter most -- without RockYou the ladder is down to targeted
+# candidates and brute force.
+
+#: Recorded in assets/wordlists-info.json, which ships with the repository, so
+#: the expected digest is verifiable without reading this file.
+_INFO_NAME = "wordlists-info.json"
+
+#: File names written into assets/. Kept in step with options.WORDLIST_NAMES /
+#: QUICK_WORDLIST_NAMES, which is what the ladder and the form actually read.
+ROCKYOU_WORDLIST_NAME = "rockyou-wpa.txt"
+QUICK_WORDLIST_NAME = "probable-wpa.txt"
+
+#: rockyou.txt is 14.3M lines; a WPA key is 8..63 bytes, which leaves 9.6M.
+#: Both numbers are checked against the recorded file rather than assumed.
+_MIN_PSK = 8
+_MAX_PSK = 63
+
+
+def _wordlist_info() -> dict:
+    path = ASSETS_DIR / _INFO_NAME
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def installed_wordlists() -> dict[str, Path]:
+    """The dictionaries present in assets/, by role."""
+    from .options import find_extra_wordlist, find_quick_wordlist, find_wordlist
+
+    found = {"RockYou": find_wordlist(ASSETS_DIR),
+             "частые пароли": find_quick_wordlist(ASSETS_DIR),
+             "доп. словарь": find_extra_wordlist(ASSETS_DIR)}
+    return {name: path for name, path in found.items() if path is not None}
+
+
+def _filter_wpa(source: Path, dest: Path) -> int:
+    """Copy the 8..63-byte lines of ``source`` into ``dest``; return the count.
+
+    Byte-wise, never decoded: a candidate's WPA length is measured in bytes, so
+    ``пароль`` counts as 12 (16 bytes) and drops out exactly as hashcat's kernel
+    would reject it. Decoding to str first and counting characters would keep
+    six-byte candidates and drop real eight-byte ones.
+    """
+    kept = 0
+    with source.open("rb") as fin, dest.open("wb") as fout:
+        for raw in fin:
+            candidate = raw.rstrip(b"\r\n")
+            if not (_MIN_PSK <= len(candidate) <= _MAX_PSK):
+                continue
+            fout.write(candidate + b"\n")
+            kept += 1
+    return kept
+
+
+def install_wordlists(
+    *,
+    on_log: Optional[Callable[[str], None]] = None,
+    on_progress: Optional[Callable[[str, int, int], None]] = None,
+) -> dict[str, str]:
+    """Fetch RockYou WPA and the quick list, verifying digests. Never raises.
+
+    Returns ``{name: "ok" | message}``. A 53 MB download that fails should not
+    take the whole setup down, and a machine that already has a dictionary
+    should not download another one.
+    """
+    log = on_log or (lambda _line: None)
+    info = _wordlist_info()
+    results: dict[str, str] = {}
+
+    from .options import find_quick_wordlist, find_wordlist
+
+    quick = find_quick_wordlist(ASSETS_DIR)
+    if quick is not None:
+        log(f"Словарь частых паролей: уже есть ({quick.name})")
+        results["quick"] = "ok"
+    elif info.get("quick_source"):
+        name = QUICK_WORDLIST_NAME
+        log(f"Словарь частых паролей: скачиваю {name}...")
+        tmp = Path(tempfile.gettempdir()) / name
+        try:
+            _download(info["quick_source"], tmp, info.get("quick_sha256") or "")
+            expected = info.get("quick_candidates")
+            count = sum(1 for _ in tmp.open("rb"))
+            if expected and count != expected:
+                tmp.unlink(missing_ok=True)
+                raise InstallError(
+                    f"строк {count}, ожидалось {expected}"
+                )
+            ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(tmp, ASSETS_DIR / name)
+            log(f"  {name}: {count:,} кандидатов, OK")
+            results["quick"] = "ok"
+        except InstallError as exc:
+            log(f"  не получилось: {exc}")
+            results["quick"] = str(exc)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    rockyou = find_wordlist(ASSETS_DIR)
+    if rockyou is not None:
+        log(f"RockYou WPA: уже есть ({rockyou.name})")
+        results["rockyou"] = "ok"
+    elif info.get("source") and info.get("rockyou_wpa_sha256"):
+        log("RockYou WPA: скачиваю архив (~53 МБ), это займёт минуту...")
+        tmp_dir = Path(tempfile.mkdtemp(prefix="wifi_tool_wl_"))
+        try:
+            archive = tmp_dir / "rockyou.txt.tar.gz"
+            _download(info["source"], archive, info.get("rockyou_archive_sha256") or "",
+                      on_progress=(lambda d, t: on_progress("rockyou", d, t))
+                      if on_progress else None)
+            log(f"  архив SHA-256 OK, распаковываю...")
+            proc = subprocess.run(["tar", "-xzf", str(archive), "-C", str(tmp_dir)],
+                                  capture_output=True, text=True, errors="replace",
+                                  timeout=900)
+            if proc.returncode != 0:
+                raise InstallError(f"tar вернул код {proc.returncode}")
+            log("  фильтрую по длине WPA (8–63 байта)...")
+            dest = ASSETS_DIR / ROCKYOU_WORDLIST_NAME
+            count = _filter_wpa(tmp_dir / "rockyou.txt", dest)
+            actual = _sha256(dest)
+            expected = info["rockyou_wpa_sha256"]
+            if actual != expected:
+                dest.unlink(missing_ok=True)
+                raise InstallError(
+                    "собранный словарь не совпал с записанным SHA-256,\n"
+                    f"  ожидалось: {expected}\n  получено : {actual}"
+                )
+            want_count = info.get("rockyou_wpa_candidates")
+            if want_count and count != want_count:
+                dest.unlink(missing_ok=True)
+                raise InstallError(f"кандидатов {count}, ожидалось {want_count}")
+            log(f"  {ROCKYOU_WORDLIST_NAME}: {count:,} кандидатов, SHA-256 OK")
+            results["rockyou"] = "ok"
+        except InstallError as exc:
+            log(f"  не получилось: {exc}")
+            results["rockyou"] = str(exc)
+        except Exception as exc:  # noqa: BLE001
+            log(f"  неожиданная ошибка: {exc}")
+            results["rockyou"] = str(exc)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return results

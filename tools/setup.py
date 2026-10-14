@@ -72,10 +72,36 @@ def _check_words() -> None:
         print(f"  быстрый словарь: {quick.name}")
     else:
         print("  [!] быстрого словаря нет -- положи probable-wpa.txt в assets/")
+
+
+def _check_captures() -> None:
     try:
-        ensure_captures_dir()
+        path = ensure_captures_dir()
+        print(f"  папка захватов: {path}")
     except Exception as exc:  # noqa: BLE001 - not worth failing setup over
         print(f"  (!) папка captures/ недоступна: {exc}")
+
+
+def _install_words(only_check: bool) -> int:
+    """Fetch the dictionaries. Returns the number that failed."""
+    if only_check:
+        found = installer.installed_wordlists()
+        for name, path in found.items():
+            print(f"  [OK] {name:<18} {path.name}")
+        if not found:
+            print("  [--] словарей нет")
+        return 0
+
+    results = asyncio.run(installer.install_wordlists(on_log=lambda line: print(f"  {line}")))
+    failed = 0
+    for key, outcome in results.items():
+        title = "RockYou WPA" if key == "rockyou" else "частые пароли"
+        if outcome == "ok":
+            print(f"  [OK] {title}")
+        else:
+            failed += 1
+            print(f"  [!!] {title}: {outcome}")
+    return failed
 
 
 async def _install_tools(only: list[str] | None) -> int:
@@ -140,11 +166,21 @@ def main() -> int:
             print("\n  Продолжаю: подбор заработает для готовых файлов захвата,")
             print("  а для живой атаки нужен hashcat — см. F1 → Установить компоненты.")
 
-    _rule("3. Словари и рабочие папки")
-    _check_words()
+    _rule("3. Словари")
+    if args.only:
+        # A targeted reinstall should not start pulling a 53 MB archive.
+        _check_words()
+    else:
+        words_failed = _install_words(args.check)
+        if words_failed and not args.check:
+            print("\n  Без RockYou лестница остаётся на кандидатах по имени сети")
+            print("  и масках. Скачать позже: uv run python tools/setup.py")
+
+    _rule("4. Рабочие папки")
+    _check_captures()
 
     _rule("Готово")
-    print(f"  Запуск: uv run wifi-tool")
+    print("  Запуск: uv run wifi-tool")
     if not deps_ok:
         print("  Сначала: uv sync")
     return 0 if deps_ok else 1
