@@ -158,7 +158,12 @@ def _fields(text: str) -> dict[str, list[str]]:
 
 def read_profile(name: str) -> SavedProfile:
     """Read one profile, including its key when the current user owns it."""
-    text = _netsh(["show", "profile", f"name={name}", "key=clear"])
+    # netsh re-parses its own command line rather than trusting argv as split
+    # by the OS, so an unquoted "name=<value>" only works while <value> has no
+    # spaces. A profile name is an SSID -- a string fully chosen by whichever
+    # access point broadcast it, space and all -- so it is quoted the same way
+    # capturer.py already has to quote an adapter name for the same reason.
+    text = _netsh(["show", "profile", f'name="{name}"', "key=clear"])
     if not text.strip():
         raise ProfileError(f"профиль не найден: {name}")
 

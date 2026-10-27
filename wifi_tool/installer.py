@@ -371,11 +371,20 @@ def install_npcap(
 
     url = NPCAP_URL.format(version=NPCAP_VERSION)
     log(f"Npcap: скачиваю {url}")
-    installer_path = Path(tempfile.gettempdir()) / f"npcap-{NPCAP_VERSION}.exe"
+    # A predictable path in the shared %TEMP% (``npcap-<version>.exe``) left a
+    # TOCTOU window open between the SHA-256 check in _download() and the
+    # subprocess.run() below -- this installer runs elevated, so another
+    # process under the same user account could swap the file in that window
+    # and get its own binary launched with administrator rights. A private,
+    # unpredictably-named directory closes that window: nothing outside this
+    # process can even guess the path to race against.
+    tmp_dir = Path(tempfile.mkdtemp(prefix="wifi_tool_npcap_"))
+    installer_path = tmp_dir / f"npcap-{NPCAP_VERSION}.exe"
     try:
         _download(url, installer_path, NPCAP_SHA256)
     except InstallError as exc:
         log(f"  не получилось: {exc}")
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return {"status": "failed", "message": str(exc), "code": None}
     log("  подпись Nmap Software LLC, SHA-256 OK")
 
@@ -400,7 +409,7 @@ def install_npcap(
         log(message)
         return {"status": "failed", "message": message, "code": None}
     finally:
-        installer_path.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     meaning = NPCAP_EXIT.get(code, f"код {code}")
     log(f"  установщик завершился: {meaning}")
@@ -722,13 +731,16 @@ def install_wordlists(
     elif info.get("quick_source"):
         name = QUICK_WORDLIST_NAME
         log(f"Словарь частых паролей: скачиваю {name}...")
-        tmp = Path(tempfile.gettempdir()) / name
+        # Same reasoning as the Npcap installer above: a private directory
+        # instead of a fixed name in the shared %TEMP%, so the file checked
+        # against quick_sha256 is the same file shutil.copy2() reads from.
+        tmp_dir = Path(tempfile.mkdtemp(prefix="wifi_tool_wl_quick_"))
+        tmp = tmp_dir / name
         try:
             _download(info["quick_source"], tmp, info.get("quick_sha256") or "")
             expected = info.get("quick_candidates")
             count = sum(1 for _ in tmp.open("rb"))
             if expected and count != expected:
-                tmp.unlink(missing_ok=True)
                 raise InstallError(
                     f"строк {count}, ожидалось {expected}"
                 )
@@ -740,7 +752,7 @@ def install_wordlists(
             log(f"  не получилось: {exc}")
             results["quick"] = str(exc)
         finally:
-            tmp.unlink(missing_ok=True)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     rockyou = find_rockyou(ASSETS_DIR)
     if rockyou is not None:
