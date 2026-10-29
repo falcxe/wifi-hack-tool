@@ -1,0 +1,53 @@
+name: Release
+
+# A pushed tag like v0.2.2 is the only trigger: building on every commit (as
+# package.yml already does, for the wheel) would spend minutes packaging an
+# exe nobody asked for yet. The tag is also the version string on the
+# release and inside the uploaded file name.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    # Windows-only on purpose: the app is a Windows TUI (netsh, Npcap), and a
+    # Linux-built exe would not run where this tool is meant to run at all.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Check lock file
+        run: uv lock --check
+
+      - name: Install dependencies (app + PyInstaller)
+        run: uv sync --group build
+
+      - name: Build wifi-tool.exe
+        run: uv run pyinstaller --clean -y wifi-tool.spec
+
+      # assets/ (hashcat, wordlists, rules) is not bundled -- same reason the
+      # exe's own spec leaves it out: it is several hundred MB and fetched on
+      # demand by tools/setup.py / the first-run flow, not shipped per release.
+      - name: Name the artifact after the tag
+        shell: pwsh
+        run: Copy-Item dist/wifi-tool.exe "dist/wifi-tool-${{ github.ref_name }}.exe"
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}"
+          "dist/wifi-tool-${{ github.ref_name }}.exe"
+          --title "${{ github.ref_name }}"
+          --generate-notes

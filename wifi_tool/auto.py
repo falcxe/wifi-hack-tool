@@ -106,13 +106,22 @@ def _bases(network) -> list[str]:
     return out
 
 
+#: Punctuation many ISPs/routers append to a generated password, or that a
+#: security policy forces a user to add to an otherwise guessable base. A
+#: single trailing character costs one extra candidate per base and catches
+#: a whole family (``MyWiFi!``, ``MyWiFi_``) that no digit suffix produces.
+_SPECIAL_SUFFIXES: tuple[str, ...] = ("!", "@", "#", "$", "_", ".")
+
+
 def _with_numbers(base: str) -> Iterable[str]:
-    """``base`` alone, then with 0..9999 appended, then with common years."""
+    """``base`` alone, then with 0..9999 appended, then with common years
+    and a single trailing punctuation character."""
     if not base:
         return ()
     yield base
     yield from (f"{base}{n:04d}" for n in range(10_000))
     yield from (f"{base}{year}" for year in range(2010, 2031))
+    yield from (f"{base}{ch}" for ch in _SPECIAL_SUFFIXES)
 
 
 def candidates_for(network) -> list[str]:
@@ -135,8 +144,12 @@ def candidates_for(network) -> list[str]:
     bssid = (network.bssid or "").replace(":", "").replace("-", "").lower()
 
     # 1. The name of the network and its stripped forms are the single most
-    #    common home-router password.
-    for base in bases[:3]:
+    #    common home-router password. Every base gets this, not just the
+    #    first three (SSID-derived) ones: a sticker password built from the
+    #    MAC tail plus "123"/"1234" is exactly as common a shape as one built
+    #    from the SSID, and skipping it here left it to the much slower
+    #    0000..9999 sweep below, which does not even cover 3-digit "123".
+    for base in bases:
         add(base)
         add(base + "123")
         add(base + "1234")
