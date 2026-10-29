@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -103,8 +104,24 @@ async def _run(pending_path: str | None, automatic: bool = False) -> None:
         controller.stop_pending()
 
 
+def _strip_self_path(argv: list[str]) -> list[str]:
+    """Drop any argument that is just the running executable's own path.
+
+    Observed on Windows 11 with Windows Terminal set as the default console
+    host: double-clicking the exe in Explorer launches it with its own path
+    repeated as an argument, on top of the one already in ``sys.argv[0]``.
+    This parser has no positional argument at all -- every option is a flag --
+    so a bare token identical to the executable's path can never be real
+    input; left in, it is the whole difference between a double-click that
+    opens the TUI and one that prints "unrecognized arguments: <that same
+    path>" and exits.
+    """
+    self_path = os.path.normcase(os.path.abspath(sys.argv[0]))
+    return [a for a in argv if os.path.normcase(os.path.abspath(a)) != self_path]
+
+
 def main() -> int:
-    opts = _parse_args(sys.argv[1:])
+    opts = _parse_args(_strip_self_path(sys.argv[1:]))
     controller.configure_cracking(opts["crack_options"])
 
     # Before anything is drawn: a Windows console left on code page 866 turns
