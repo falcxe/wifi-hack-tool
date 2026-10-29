@@ -1,8 +1,9 @@
 [project]
 name = "wifi-tool"
-version = "0.1.0"
+version = "0.2.1"
 description = "TUI для аудита и подбора пароля собственной Wi-Fi сети под Windows"
 readme = "README.md"
+license = "MIT"
 # opentui 0.1.2 требует 3.12, поэтому 3.11 не подходит ни при каких флагах.
 requires-python = ">=3.12"
 dependencies = [
@@ -13,14 +14,13 @@ dependencies = [
     # всегда неактивен, и на экране аудита плата не видна даже воткнутой.
     "pyserial==3.5",
 
-    # Инъекция кадров 802.11 для «Отвалить клиентов» (wifi_tool/deauth.py).
-    # Опционально: без него деаут молча выключается, остальное работает.
-    "scapy==2.8.0",
-
     # Распаковка hashcat-архива средствами Python (wifi_tool/installer.py).
     # Нужна только если 7z-архив собран без BCJ2; иначе хватает assets\7zr.exe.
     "py7zr==1.1.3",
 ]
+
+[project.optional-dependencies]
+deauth = ["scapy==2.8.0"]
 
 [project.scripts]
 wifi-tool = "wifi_tool.__main__:main"
@@ -30,6 +30,11 @@ dev = [
     # Только для tools/preview_motion.py: склейка кадров в анимированный GIF.
     # Приложение и тесты без неё работают.
     "pillow>=11.0",
+]
+build = [
+    # Только для wifi-tool.spec / .github/workflows/release.yml: сборка
+    # отдельного exe. Приложение и тесты её не требуют.
+    "pyinstaller>=6.22",
 ]
 
 [build-system]
