@@ -1,6 +1,6 @@
 [project]
 name = "wifi-tool"
-version = "0.2.2"
+version = "0.2.3"
 description = "TUI для аудита и подбора пароля собственной Wi-Fi сети под Windows"
 readme = "README.md"
 license = "MIT"
