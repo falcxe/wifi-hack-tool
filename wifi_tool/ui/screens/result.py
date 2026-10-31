@@ -67,17 +67,42 @@ def _masked(result) -> bool:
                 and result.method != LOCAL_KEY_METHOD)
 
 
+def _missing_components() -> bool:
+    """Whether the thing stopping this result is a component, not a password.
+
+    ``hashcat не найден`` / ``словарь не найден`` is not the same kind of
+    failure as "password not in the dictionary" -- it is fixable in one key
+    press, by the same installer «Параметры» already offers, and that
+    keypress belongs right here, on the screen that just told the user they
+    are stuck.
+    """
+    ready = state.readiness.peek()
+    return ready is not None and (ready.hashcat is None or ready.wordlist is None)
+
+
+def _install_now() -> None:
+    from .. import controller
+    controller.download_tools()
+
+
 def result_actions(has_result: bool = True) -> list[Action]:
     result = state.result.peek()
     actions = []
+    downloading = state.install_state.peek() == "working"
     if REVEAL_SECRET and _masked(result):
         revealed = _shown(result)
         actions.append(Action("Скрыть пароль" if revealed else "Показать пароль", _toggle_password,
                               primary=True, identifier="secret", category="Основное"))
+    if has_result and result is not None and not result.success and _missing_components():
+        # The fix for "hashcat не найден" is a download, not a retry: offered
+        # first, and it is what Enter does by default on this screen.
+        actions.append(Action("Идёт установка…" if downloading else "Установить компоненты",
+                              _install_now, enabled=not downloading,
+                              primary=not actions, category="Основное"))
     if has_result and result is not None and result.request is not None:
         capture = result.method == "захват" or result.request.mode in ("capture", "board")
         actions.append(Action("Повторить захват" if capture else "Повторить подбор", _retry,
-                              primary=not actions, category="Основное"))
+                              enabled=not downloading, primary=not actions, category="Основное"))
     if has_result and result is not None and not result.success:
         # The remedy for a failed run is almost always "try another source", and
         # a capture file is the one that works without the hardware. Offered

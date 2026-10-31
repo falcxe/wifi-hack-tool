@@ -147,11 +147,12 @@ class CrackOptions:
     mask: str | None = None
     #: Wall-clock ceiling in seconds. In the manual mode it bounds one hashcat
     #: run; in the automatic mode it is the whole ladder's budget -- which is why
-    #: the default is 1800 and not something smaller: the stages that actually
-    #: find home-router passwords (RockYou through best66, all-digit runs) need
-    #: half an hour to be covered completely, and a default that stops halfway
-    #: through the mutation stage spends the same time for a fraction of the odds.
-    runtime: int = 1800
+    #: the default matches :data:`wifi_tool.pipeline.AUTO_RUNTIME` and not
+    #: something smaller: the stages that actually find home-router passwords
+    #: (RockYou through best66, all-digit runs) need the full hour to be
+    #: covered completely, and a default that stops partway through the
+    #: mutation stage spends the same time for a fraction of the odds.
+    runtime: int = 3600
     bssid: str | None = None
     use_rules: bool = True
     #: Force clients off the network during the capture so they reconnect and

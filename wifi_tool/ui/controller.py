@@ -1013,6 +1013,14 @@ async def bootstrap(*, scan: bool = True) -> None:
     ``scan=False`` is the first run: the welcome screen needs the readiness
     probe and the board lookup, but a network list nobody is looking at yet is
     twenty seconds of radio time spent on a screen nobody has read.
+
+    A missing hashcat or dictionary starts downloading right here, unasked.
+    The alternative -- waiting until a crack attempt fails and telling the
+    user to go find a menu -- is the exact complaint this exists to close:
+    someone who just wants to run the program should not have to know
+    "F1 → Установить компоненты" exists. ``download_tools()`` is itself a
+    no-op when nothing is missing, so this costs nothing on a machine that
+    already has everything.
     """
     readiness = await refresh_readiness()
     state.is_admin.set(readiness.admin)
@@ -1023,6 +1031,8 @@ async def bootstrap(*, scan: bool = True) -> None:
     # in decides what the run can even attempt, and that is worth knowing on the
     # scan screen rather than after selecting a network.
     probe_board()  # spawns its own task; do not await it here
+    if readiness.hashcat is None or readiness.wordlist is None:
+        download_tools()  # spawns its own task; do not await it here
     if scan:
         await start_scan()
 

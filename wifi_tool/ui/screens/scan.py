@@ -355,6 +355,12 @@ def ScanScreen() -> Box:
     context = "Обновление…" if scanning else "Поиск завершён" if nets else "Ожидание сетей"
     if adapter:
         context += " · " + adapter.description
+    if state.install_state() == "working":
+        # The same background download bootstrap() kicked off for a missing
+        # hashcat/словарь -- shown here because this is the screen a user
+        # lands on and sits at while it runs, not buried in a menu.
+        progress = state.install_progress()
+        context += " · Устанавливаю компоненты" + (f" ({progress})" if progress else "…")
     value = edit_preview(query, state.scan_query_cursor(), width - 14) if focus == "search" else query or "SSID, BSSID, защита…"
     search = Row(col("/ Поиск", 10, fg=ACCENT if focus == "search" else TEXT_SECONDARY), col(value, width - 14, fg=TEXT_PRIMARY if query or focus == "search" else TEXT_SECONDARY),
                  height=1, flex_shrink=0, padding_x=2, on_mouse_down=click_handler(focus_search))
