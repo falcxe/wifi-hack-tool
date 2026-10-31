@@ -49,6 +49,7 @@ MAX_TARGETED = 400_000
 
 _SEPARATORS = re.compile(r"[\s_\-.]+")
 _DIGITS_ONLY = re.compile(r"\d+")
+_LEET = str.maketrans("aeios", "43105")
 
 #: Factory defaults and admin credentials that ship with consumer and ISP gear.
 #: These are the passwords that actually turn up on home networks far more often
@@ -67,6 +68,10 @@ _FACTORY_DEFAULTS: tuple[str, ...] = (
     "ubnt", "ubnt1234", "tplink", "tplink1234", "netgear", "netgear1234",
     "dlink", "dlink1234", "zyxel1234", "asus1234", "keenth", "meinsm", "hallo",
     "vodafone", "vodafone1", "o2wifi", "telekom", "unitymedia", "ewe1234",
+    "password123", "qwerty", "qwertyuiop", "123456", "123123", "abc123",
+    "password12", "letmein123", "welcome123", "admin123", "root", "toor",
+    "pass", "pass123", "secret", "secret123", "changeme123", "default123",
+    "wifi123", "wlan123", "internet1234", "home1234", "router123", "modem1234",
 )
 
 
@@ -84,9 +89,15 @@ def _bases(network) -> list[str]:
     ssid = (network.ssid or "").strip()
     if ssid:
         compact = _SEPARATORS.sub("", ssid)
-        for form in (compact, compact.lower(), compact.upper()):
+        for form in (compact, compact.lower(), compact.upper(), compact.title(),
+                     compact[::-1]):
             if form and form not in out:
                 out.append(form)
+        # Leet-speak variants of the SSID: very common for "cool" home networks.
+        leet = compact.translate(_LEET)
+        if leet and leet != compact and leet not in out:
+            out.append(leet)
+            out.append(leet.lower())
     bssid = (network.bssid or "").replace(":", "").replace("-", "").lower()
     if len(bssid) == 12:
         # Sticker passwords are routinely the tail of the MAC, or the whole
@@ -100,7 +111,16 @@ def _bases(network) -> list[str]:
             bssid,
             bssid.upper(),
             bssid[-6:].upper(),
+            str(int(bssid[-8:], 16)),
+            str(int(bssid[-6:], 16)),
         ):
+            if form not in out:
+                out.append(form)
+    # Common SSID-derived transformations seen in the wild.
+    if ssid:
+        compact = _SEPARATORS.sub("", ssid)
+        for form in (compact + "wifi", compact + "WiFi", "wifi" + compact,
+                     compact + "net", compact + "home"):
             if form not in out:
                 out.append(form)
     return out
@@ -114,14 +134,17 @@ _SPECIAL_SUFFIXES: tuple[str, ...] = ("!", "@", "#", "$", "_", ".")
 
 
 def _with_numbers(base: str) -> Iterable[str]:
-    """``base`` alone, then with 0..9999 appended, then with common years
-    and a single trailing punctuation character."""
+    """``base`` alone, then with 0..9999 appended, then with common years,
+    a wider year range, single trailing punctuation, and common suffixes."""
     if not base:
         return ()
     yield base
     yield from (f"{base}{n:04d}" for n in range(10_000))
-    yield from (f"{base}{year}" for year in range(2010, 2031))
+    yield from (f"{base}{n}" for n in range(1000))
+    yield from (f"{base}{year}" for year in range(1990, 2036))
     yield from (f"{base}{ch}" for ch in _SPECIAL_SUFFIXES)
+    for suffix in ("123", "1234", "12345", "123456", "000", "00", "69", "420", "777", "888", "999"):
+        yield f"{base}{suffix}"
 
 
 def candidates_for(network) -> list[str]:
@@ -433,7 +456,10 @@ async def run_ladder(
     # Not clamped to a minimum: a zero budget must run nothing at all, which is
     # what a caller asking for a dry run of the plan expects.
     deadline = time.monotonic() + max(0.0, float(total_runtime))
-    left = [stage.seconds(rate) for stage in stages]
+    # Keep remaining needs in candidate counts, not seconds: hashcat's real speed
+    # is only known after the first stage reports it, and a stale seconds figure
+    # would slice the rest of the ladder against a rate nobody measured.
+    left = [stage.candidates() for stage in stages]
     outcome: object | None = None
 
     for index, stage in enumerate(stages):
@@ -443,7 +469,8 @@ async def run_ladder(
         available = deadline - now
         if available <= 0:
             break
-        plan = _plan_slices(available, left)
+        left_seconds = [count / max(1.0, rate.hps) for count in left]
+        plan = _plan_slices(available, left_seconds)
         share = plan[index]
         if on_stage is not None:
             on_stage(index, stage, share)

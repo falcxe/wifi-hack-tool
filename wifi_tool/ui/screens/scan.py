@@ -322,8 +322,12 @@ def ScanScreen() -> Box:
                                                     focused=focus == "list", zebra=True))
     if not items:
         if error:
-            rows = [text_line("[!] Сканирование недоступно", list_width - 4, color=ERROR, bold=True)]
-            rows += [text_line(line, list_width - 4, color=WARNING) for line in wrap(error, list_width - 4)[:max(1, room - 1)]]
+            rows = [text_line("[!] Не удалось найти сети", list_width - 4, color=ERROR, bold=True)]
+            rows += [text_line("Что делать: " + line, list_width - 4, color=WARNING)
+                     for line in wrap(error, list_width - 4)[:max(1, room - 1)]]
+            if room > 2:
+                rows.append(text_line("Подробности — F1 → «Подробности ошибки»",
+                                      list_width - 4))
         elif scanning:
             rows = [text_line("Сканирую эфир…", list_width - 4, color=ACCENT), text_line("Список появится после поиска", list_width - 4)]
         else:

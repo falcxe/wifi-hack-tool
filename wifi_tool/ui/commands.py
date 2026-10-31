@@ -12,6 +12,7 @@ from . import dialogs, navigation, state
 from .actions import Action, group_actions, key_of
 
 DESCRIPTIONS = {
+    "С чего начать": "Выбрать сценарий заново: что вы хотите проверить.",
     "Аудит": "Открыть сведения о выбранной сети и план проверки.",
     "Отчёт": "Открыть сведения о выбранной сети и план проверки.",
     "Ключи": "Посмотреть сохранённые профили и ключи Windows.",
@@ -110,10 +111,11 @@ def saved_action() -> tuple[Action, ...]:
 
 def available() -> list[Action]:
     from . import board_captures, controller, forms
-    from .screens import audit, crack, crack_form, result, saved, scan
+    from .screens import audit, crack, crack_form, result, saved, scan, start
 
     phase = state.phase.peek()
     providers = {
+        "start": start.start_actions,
         "scan": scan.scan_actions,
         "audit": lambda: audit.audit_actions(
             audit._blocker(state.audit_network.peek(), state.readiness.peek())
@@ -144,6 +146,9 @@ def available() -> list[Action]:
                    description="Сохранённые файлы со стика и найденные в них пары EAPOL.", category="Источники"),
             Action("К списку сетей", controller.go_to_scan,
                    description="Главный экран со всеми найденными сетями.", category="Переходы"),
+            Action("С чего начать", controller.open_start,
+                   description="Вернуться к выбору сценария и проверке компьютера.",
+                   category="Переходы"),
             *saved_action(),
             Action("Параметры", open_parameters,
                    description=DESCRIPTIONS["Параметры"], category="Настройки"),
@@ -157,6 +162,7 @@ def available() -> list[Action]:
                 description="Показать последний завершённый результат.", category="Переходы"))
         labels = {item.label for item in items}
         items.extend(item for item in global_items if item.label not in labels
+                     and not (phase == "start" and item.label == "С чего начать")
                      and not (phase == "scan" and item.label == "К списку сетей")
                      and not (phase == "crack_form" and item.label == "Параметры")
                      and not (item.label == "К списку сетей" and "К списку сетей" in labels)

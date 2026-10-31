@@ -23,7 +23,8 @@ from .test_tui_setup import FIXTURE, choose_command, field_index, native_input
 from wifi_tool import cracker, pipeline, profiles
 from wifi_tool.models import CrackResult, Network, RunRequest
 from wifi_tool.options import CrackOptions
-from wifi_tool.ui import commands, controller, controls, dialogs, forms, navigation, state
+from wifi_tool.ui import (commands, controller, controls, dialogs, forms,
+                          navigation, plain, state)
 from wifi_tool.ui.actions import Action
 from wifi_tool.ui.app import App
 from wifi_tool.ui.screens import result, saved, scan
@@ -265,7 +266,7 @@ class RedesignTests(unittest.IsolatedAsyncioTestCase):
                     view, native = await self.render(width, height)
                     frame = view.capture_char_frame()
                     expected = {"loading": "Сканирую эфир", "empty": "Сети не найдены",
-                                "search": "Нет совпадений", "error": "Сканирование недоступно"}[mode]
+                                "search": "Нет совпадений", "error": "Не удалось найти сети"}[mode]
                     self.assertIn(expected, frame)
                     self.assertIn("Enter отчёт", frame.splitlines()[-1])
                     self.assertNotIn("F1 меню", frame)
@@ -354,7 +355,11 @@ class RedesignTests(unittest.IsolatedAsyncioTestCase):
         state.readiness.set(pipeline.Readiness(admin=True, capture_problem="fixture driver unavailable"))
         forms.open_form(NETS[0])
         forms.set_value("mode", "mask")
-        self.assertIn("fixture driver unavailable", forms.start_problem())
+        # Plain on screen, exact reason in the technical section -- a blocked
+        # run has to survive the switch from one to the other.
+        self.assertIn("Подключите адаптер", forms.start_problem())
+        self.assertTrue(any("fixture driver unavailable"
+                            in line for line in plain.technical_lines(state.readiness.peek())))
         forms.focus(field_index("mask"))
         view, native = await self.render()
         focus = state.form_focus.peek()
@@ -369,7 +374,7 @@ class RedesignTests(unittest.IsolatedAsyncioTestCase):
         forms.open_form(capture=str(FIXTURE))
         forms.set_value("mode", "mask")
         state.readiness.set(pipeline.Readiness())
-        self.assertIn("hashcat не найден", forms.start_problem())
+        self.assertIn("Не установлена программа подбора", forms.start_problem())
         forms.focus(len(forms.fields()) - 1)
         view, native = await self.render(44, 16)
         with patch.object(forms, "submit") as submit:

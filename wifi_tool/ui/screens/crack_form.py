@@ -141,10 +141,13 @@ def _clip(text: str, width: int, max_lines: int, color: str) -> list:
 
 
 def _compact_problem(problem: str) -> str:
-    if problem.startswith("Нет данных для проверки пароля"):
-        return "Выберите файл захвата с EAPOL / PMKID"
-    if problem.startswith("Доступность захвата ещё не проверена"):
-        return "Проверка компонентов…"
+    """One line for the status bar: what is missing and what to do about it.
+
+    The messages themselves are already plain (see :mod:`wifi_tool.ui.plain`);
+    the long ones are cut rather than summarised, because a status bar that
+    invents its own shorter wording ends up disagreeing with the field message
+    right above it.
+    """
     return problem.split("\n")[0]
 
 

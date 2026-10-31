@@ -373,7 +373,7 @@ class Callbacks:
 
 #: Default wall-clock budget for :func:`auto_attack`: enough to sweep the
 #: generated candidates, both dictionaries and most of the mutation stage.
-AUTO_RUNTIME = 1800
+AUTO_RUNTIME = 3600
 
 #: How long a capture listens before giving up, in seconds.
 #:
@@ -720,6 +720,7 @@ async def attack(
         elapsed=time.monotonic() - started,
         error=error,
         log=list(outcome.log),
+        verified=True if outcome.cracked else None,
     )
 
 
@@ -835,15 +836,22 @@ async def auto_attack(
                 elapsed=time.monotonic() - started,
                 log=[f"ключ прочитан из сохранённого профиля «{network.ssid}» "
                      f"и подтверждён MIC рукопожатия"],
+                verified=True,
             )
         else:
+            # checked is None: no capture to settle it against. The key is a
+            # candidate, not a proof -- success=False and verified=False say
+            # so explicitly, so the result screen shows it as unconfirmed
+            # rather than as a found password (see CrackResult.verified).
             return CrackResult(
                 network=network,
                 password=stored,
-                success=True,
+                success=False,
                 method="ключ Windows",
                 elapsed=time.monotonic() - started,
-                log=[f"ключ прочитан из сохранённого профиля «{network.ssid}»"],
+                log=[f"ключ прочитан из сохранённого профиля «{network.ssid}», "
+                     f"но подтвердить его рукопожатием не удалось"],
+                verified=False,
             )
     cb.log("В сохранённых профилях этого компьютера ключа нет")
 
@@ -1000,4 +1008,5 @@ async def auto_attack(
         error=error,
         remedy=remedy,
         log=list(outcome.log) if outcome is not None else [],
+        verified=True if outcome is not None and outcome.cracked else None,
     )

@@ -27,6 +27,7 @@ from .screens.audit import AuditScreen
 from .screens.result import ResultScreen
 from .screens.saved import SavedScreen
 from .screens.scan import ScanScreen
+from .screens.start import StartScreen
 from .screens.crack_form import CrackFormScreen, FilePickerScreen, CaptureTargetsScreen, MethodHelpScreen
 
 def _dispatch_key(event) -> None:
@@ -84,6 +85,7 @@ def _cases() -> dict:
     # "setup" is gone: the component checklist and the cracking parameters were
     # two screens answering one question, and they are merged into "crack_form".
     return {
+        "start": StartScreen,
         "saved": SavedScreen,
         "scan": ScanScreen,
         "audit": AuditScreen,

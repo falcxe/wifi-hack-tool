@@ -168,6 +168,13 @@ revealed_secret: Signal = Signal(None, name="revealed_secret")
 # Setup / readiness -- describes the machine, not the current run.
 readiness: Signal = Signal(None, name="readiness")
 
+# First-run screen. ``scenario_index`` is the cursor over the three things a
+# user can want; it is session state only, and the *choice* itself is persisted
+# by :mod:`wifi_tool.first_run`. ``start_details`` is the collapsible technical
+# section: collapsed by default, because the plain wording has to stand alone.
+scenario_index: Signal = Signal(0, name="scenario_index")
+start_details: Signal = Signal(False, name="start_details")
+
 # Installer
 install_state: Signal = Signal("idle", name="install_state")  # idle | working
 install_progress: Signal = Signal("", name="install_progress")
@@ -235,6 +242,8 @@ def reset() -> None:
     saved_loading.set(False)
     saved_error.set("")
     revealed_secret.set(None)
+    scenario_index.set(0)
+    start_details.set(False)
     audit_network.set(None)
     cracking_network.set(None)
     log.set([])

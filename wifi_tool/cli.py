@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from opentui import render
 
 from . import __version__
+from . import first_run
 from .assets import is_admin, relaunch_elevated
 from .console import enable_utf8_console
 from .options import CrackOptions
@@ -45,6 +47,16 @@ def _parse_args(argv: list[str]) -> dict:
         help="автоматический режим: без вопросов, Enter в TUI делает то же",
     )
     parser.add_argument("--bssid", help="целевая точка доступа в файле захвата")
+    parser.add_argument(
+        "--scenario",
+        choices=first_run.SCENARIOS,
+        help="сразу открыть сценарий: network (сеть), file (готовый файл), saved (ключи Windows)",
+    )
+    parser.add_argument(
+        "--no-welcome",
+        action="store_true",
+        help="не показывать первый экран с выбором сценария",
+    )
     parser.add_argument("--no-elevate", action="store_true")
     opts = vars(parser.parse_args(argv))
     # --auto and --wordlist/--mask describe the same run in two ways; say so
@@ -75,7 +87,7 @@ def _elevate() -> bool:
     return ok
 
 
-async def _run(pending_path: str | None, automatic: bool = False) -> None:
+async def _run(pending_path: str | None, automatic: bool = False, opts: dict | None = None) -> None:
     """Start the UI and schedule bootstrap on the controller's background loop.
 
     The boot task is created here rather than in a mount callback so it does not
@@ -95,7 +107,11 @@ async def _run(pending_path: str | None, automatic: bool = False) -> None:
     elif automatic:
         controller.boot_auto()
     else:
-        controller.boot()
+        # ``opts`` is optional so a caller that only wants the render loop (the
+        # headless tests) does not have to fabricate a whole argparse result.
+        opts = opts or {}
+        controller.boot(welcome=False if opts.get("no_welcome") else None,
+                        scenario=opts.get("scenario"))
     try:
         with terminal_session():
             await render(App, renderer_config())
@@ -103,9 +119,29 @@ async def _run(pending_path: str | None, automatic: bool = False) -> None:
         controller.stop_pending()
 
 
+def _strip_self_path(argv: list[str]) -> list[str]:
+    """Drop any argument that is just the running executable's own path.
+
+    Observed on Windows 11 with Windows Terminal set as the default console
+    host: double-clicking the exe in Explorer launches it with its own path
+    repeated as an argument, on top of the one already in ``sys.argv[0]``.
+    This parser has no positional argument at all -- every option is a flag --
+    so a bare token identical to the executable's path can never be real
+    input; left in, it is the whole difference between a double-click that
+    opens the TUI and one that prints "unrecognized arguments: <that same
+    path>" and exits.
+    """
+    self_path = os.path.normcase(os.path.abspath(sys.argv[0]))
+    return [a for a in argv if os.path.normcase(os.path.abspath(a)) != self_path]
+
+
 def main() -> int:
-    opts = _parse_args(sys.argv[1:])
+    opts = _parse_args(_strip_self_path(sys.argv[1:]))
     controller.configure_cracking(opts["crack_options"])
+    # Answered on the command line means answered: the choice is stored now, so
+    # the welcome screen stays away on later launches too.
+    if opts["scenario"]:
+        first_run.remember(opts["scenario"])
 
     # Before anything is drawn: a Windows console left on code page 866 turns
     # every box-drawing character and Cyrillic letter into mojibake, because
@@ -129,7 +165,7 @@ def main() -> int:
         if _elevate():
             return 0
 
-    asyncio.run(_run(opts["file"], opts["auto"]))
+    asyncio.run(_run(opts["file"], opts["auto"], opts))
     return 0
 
 
