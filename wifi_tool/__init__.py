@@ -1,6 +1,26 @@
 """WifiHackTool — a TUI WiFi cracking tool built on opentui."""
 __version__ = "0.2.4"
 
+
+def app_dir():
+    """The directory ``assets/`` (and everything else) is found next to.
+
+    A source checkout resolves this two levels up from this package, the same
+    as always. A frozen build (PyInstaller) is different: it has no ``.py``
+    files on disk, and every module's ``__file__`` points inside the
+    bootloader's private temp extraction folder (``sys._MEIPASS``), which is
+    deleted when the process exits and is never where a user who read the
+    README placed ``assets/`` -- that is next to the ``.exe`` itself. Every
+    lookup of hashcat, a wordlist or a rule file must resolve here, or a user
+    who did everything the README asked is told the component is missing.
+    """
+    import sys
+    from pathlib import Path
+
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
 #: Build stamp, shown in every screen header.
 #:
 #: This exists because of a specific, repeated failure: the app was relaunched,

@@ -23,10 +23,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List
 
-from . import hc22000
+from . import app_dir, hc22000
 from .processes import terminate as _terminate
 
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+ASSETS_DIR = app_dir() / "assets"
 CONFIG_PATH = ASSETS_DIR / "capture.json"
 
 # Defaults. Placeholders: {iface} {out} {duration} {bssid} {channel}

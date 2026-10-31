@@ -13,14 +13,14 @@ from pathlib import Path
 from typing import Callable, List
 from uuid import uuid4
 
-from . import auto, capturer, converter, cracker, deauth, hc22000
+from . import app_dir, auto, capturer, converter, cracker, deauth, hc22000
 from .assets import is_admin
 from .capturer import Backend, Interface
 from .models import CrackResult, Network
 from .options import find_extra_wordlist, find_quick_wordlist, find_wordlist
 from .scanner import AdapterInfo, ScanError, detect_adapter, scan
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = app_dir()
 ASSETS_DIR = PROJECT_ROOT / "assets"
 
 

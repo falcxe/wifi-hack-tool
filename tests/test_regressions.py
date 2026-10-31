@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import wifi_tool
 from wifi_tool import assets, capturer, converter, hc22000, pipeline, profiles
 from wifi_tool.models import CrackResult, Network
 from wifi_tool.options import CrackOptions
@@ -267,6 +268,35 @@ class ConverterRecordTests(unittest.TestCase):
         own_m3 = next(record for record in records if record[4] == frames.STA.hex() and record[8] == "13")
         self.assertEqual(m2[6], frames.ANONCE.hex())
         self.assertEqual(own_m3[6], frames.SNONCE.hex())
+
+
+class AppDirTests(unittest.TestCase):
+    """A frozen build must look for assets/ next to its own .exe.
+
+    Every module's ``Path(__file__)`` points inside PyInstaller's private
+    extraction folder once frozen, not next to the .exe a user placed
+    assets/ beside per the README -- the exact bug behind "hashcat is
+    installed, but the program says it is not" on a packaged build.
+    """
+
+    def test_source_checkout_resolves_two_levels_up(self):
+        self.assertEqual(wifi_tool.app_dir(),
+                          Path(wifi_tool.__file__).resolve().parent.parent)
+
+    def test_frozen_build_resolves_next_to_the_exe(self):
+        exe = Path("C:/Users/anyone/Downloads/wifi-tool-v0.2.4.exe")
+        with patch.object(sys, "frozen", True, create=True), \
+                patch.object(sys, "executable", str(exe)):
+            self.assertEqual(wifi_tool.app_dir(), exe.parent)
+
+    def test_every_assets_lookup_shares_the_same_root(self):
+        """A change to one module's assets dir must not drift from the rest."""
+        from wifi_tool import bootstrap, installer
+        from wifi_tool.ui import forms
+        root = wifi_tool.app_dir()
+        for module in (assets, capturer, converter, pipeline, bootstrap, installer):
+            self.assertEqual(module.ASSETS_DIR, root / "assets", module.__name__)
+        self.assertEqual(forms.ROOT, root)
 
 
 if __name__ == "__main__":

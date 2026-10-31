@@ -7,7 +7,9 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+from . import app_dir
+
+PROJECT_ROOT = app_dir()
 ASSETS_DIR = PROJECT_ROOT / "assets"
 
 Progress = Callable[[str, int, int], None]

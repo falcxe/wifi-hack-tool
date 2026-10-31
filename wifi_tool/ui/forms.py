@@ -4,13 +4,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Optional
 
+from .. import app_dir
 from ..options import (CrackOptions, WORDLIST_NAMES, find_quick_wordlist,
                        find_wordlist)
 from . import controls, dialogs, navigation, state
 from .actions import Action, CHOOSE
 from .help_content import MethodInfo
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = app_dir()
 
 #: The choice that turns waiting into an event. Separate from the rest of the
 #: form's options because it is the one that changes what happens to a network

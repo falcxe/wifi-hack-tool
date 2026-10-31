@@ -5,7 +5,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+from . import app_dir
+
+PROJECT_ROOT = app_dir()
 ASSETS_DIR = PROJECT_ROOT / "assets"
 
 #: Where captures this program makes live, and where captures pulled off a board

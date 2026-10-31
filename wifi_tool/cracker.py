@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable, List
 from uuid import uuid4
 
+from . import app_dir
 from .options import validate_mask
 from .processes import terminate as _terminate
 
@@ -67,7 +68,7 @@ def find_hashcat() -> Path | None:
     Checked in order: assets/hashcat.exe, assets/hashcat-<version>/hashcat.exe
     (how the official archive unpacks), then PATH.
     """
-    here = Path(__file__).resolve().parent.parent
+    here = app_dir()
     assets = here / "assets"
     for candidate in (assets / "hashcat.exe", assets / "hashcat"):
         if candidate.exists():

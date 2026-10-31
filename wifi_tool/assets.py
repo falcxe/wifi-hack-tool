@@ -9,7 +9,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+from . import app_dir
+
+ASSETS_DIR = app_dir() / "assets"
 
 
 @dataclass

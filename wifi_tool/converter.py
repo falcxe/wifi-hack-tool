@@ -25,11 +25,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from . import hc22000
+from . import app_dir, hc22000
 from .options import normalize_bssid
 from .processes import terminate
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = app_dir()
 ASSETS_DIR = PROJECT_ROOT / "assets"
 
 # Candidate binary names across the MSVC and GNU Windows release assets.

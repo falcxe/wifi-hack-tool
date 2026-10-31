@@ -28,7 +28,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+from . import app_dir
+
+PROJECT_ROOT = app_dir()
 ASSETS_DIR = PROJECT_ROOT / "assets"
 
 USER_AGENT = "wifi_tool/0.1 (+https://localhost)"
