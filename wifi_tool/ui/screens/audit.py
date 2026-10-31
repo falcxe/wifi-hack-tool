@@ -7,7 +7,7 @@ from opentui.hooks import use_keyboard, use_terminal_dimensions
 
 from ...models import Network
 from .. import actions as nav
-from .. import controls, dialogs, state
+from .. import controls, dialogs, plain, state
 from ..actions import Action, group_actions, key_of
 from ..controller import back_from_audit
 from ..theme import (ACCENT, OUTLINE, TEXT_SECONDARY, SUCCESS, MAX_WORKSPACE_WIDTH, TEXT_PRIMARY, WARNING, auth_color,
@@ -114,17 +114,28 @@ def _open_parameters(*_) -> None:
 
 
 def _show_details() -> None:
+    """The technical half, behind one key: exact names, values and reasons.
+
+    Everything the main screen says in plain words is repeated here verbatim in
+    the machine's own terms, because the moment this dialog exists for is
+    exactly the moment somebody needs the real string -- for a bug report, a
+    manual, or a driver download.
+    """
     from .. import controller
     net = state.audit_network.peek()
     if net is None:
         return
     width = min(64, getattr(controller._renderer, "width", 68) - 8)
+    ready = state.readiness.peek()
     info = [net.label, f"BSSID: {net.bssid or 'не получен'}", f"Защита: {net.auth or 'не объявлена'}",
             f"Шифрование: {net.protection or 'не объявлено'}", f"Канал: {net.channel or 'не получен'}",
             f"Сигнал: {net.signal}%", f"Радио: {net.radio or 'не объявлено'}"]
-    blocked = _blocker(net, state.readiness.peek())
+    blocked = _blocker(net, ready)
     if blocked:
         info.append(blocked)
+    if ready is not None and (ready.capture_problem or ready.problems):
+        info.append("")
+        info.extend(plain.technical_lines(ready))
     dialogs.open_select("Сведения о сети", [Action(line, lambda: None)
                         for text in info for line in wrap(text, width)], searchable=False)
 
@@ -189,17 +200,23 @@ def _disabled_reason(network: Network | None) -> str:
 
 
 def _blocker(network: Network, ready) -> str:
-    """One concise reason shown by the command menu and primary action."""
+    """One concise reason shown by the command menu and primary action.
+
+    Written as an instruction, not a diagnosis: the person reading this is
+    holding a mouse, not a manual. The driver message behind it is in
+    «Подробности сети» (F1).
+    """
     if not network.crackable:
         return crack_hint(network.auth)
     if ready is None:
         return ""
     if ready.capture_problem:
-        return "Захват недоступен: " + ready.capture_problem
+        return "Захват в эфире недоступен: " + plain.capture_fact(ready).todo
     if not ready.admin:
-        return "Нет прав администратора; живой захват недоступен."
+        return "Нужны права администратора — захват в эфире недоступен."
     if ready.backend is None or ready.iface is None:
-        return "Источник захвата не найден; проверь параметры."
+        return "Захват в эфире недоступен: не найден Wi-Fi или программа записи. " \
+               "F1 → «Компоненты»."
     return ""
 
 

@@ -7,8 +7,10 @@ than importing it -- the UAC re-launch restarts ``sys.argv[0]``.
 from __future__ import annotations
 
 from wifi_tool.cli import main
+from wifi_tool import logging_setup
 
 if __name__ == "__main__":
+    logging_setup.setup()
     try:
         raise SystemExit(main())
     except KeyboardInterrupt:

@@ -597,7 +597,7 @@ def test_scan_error() -> None:
 
     check(
         setup,
-        expect=["Сканирование недоступно", "ms-settings:privacy-location"],
+        expect=["Не удалось найти сети", "Что делать", "ms-settings:privacy-location"],
         label="scan / error",
     )
 

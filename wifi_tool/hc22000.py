@@ -49,6 +49,11 @@ _PCAPNG_PB = 0x00000002
 _PCAPNG_SPB = 0x00000003
 _PCAPNG_EPB = 0x00000006
 
+# Captured 802.11 frames are far smaller than this in practice. Bound records
+# from untrusted capture files before asking Python to allocate their payload.
+_MAX_CAPTURE_FRAME_BYTES = 16 * 1024 * 1024
+_MAX_PCAPNG_BLOCK_BYTES = 32 * 1024 * 1024
+
 
 class CaptureFormatError(ValueError):
     """The file is not a readable capture, rather than one holding no hashes.
@@ -120,6 +125,12 @@ def _read_pcap(fh, size: int) -> Iterator[tuple[int, bytes]]:
                 raise CaptureFormatError("файл захвата оборван в середине пакета")
             return
         _sec, _frac, incl_len, _orig = struct.unpack(endian + "IIII", rec)
+        if incl_len > _MAX_CAPTURE_FRAME_BYTES:
+            raise CaptureFormatError(
+                f"размер пакета превышает допустимый предел ({incl_len} байт)"
+            )
+        if incl_len > size - fh.tell():
+            raise CaptureFormatError("файл захвата оборван в середине пакета")
         data = fh.read(incl_len)
         if len(data) < incl_len:
             raise CaptureFormatError("файл захвата оборван в середине пакета")
@@ -188,6 +199,7 @@ def _read_pcapng(fh, size: int) -> Iterator[tuple[int, bytes]]:
             return
 
         if head[:4] == _SHB_BYTES:
+            block_start = fh.tell() - len(head)
             # Section header: the byte-order magic comes first in the body, so
             # read it before the length that is stored in that same byte order.
             magic_raw = fh.read(4)
@@ -204,6 +216,12 @@ def _read_pcapng(fh, size: int) -> Iterator[tuple[int, bytes]]:
             # trailing length = 4+4+4+4+8+4.
             if total < 28:
                 raise CaptureFormatError("повреждённый pcapng блок")
+            if total > _MAX_PCAPNG_BLOCK_BYTES:
+                raise CaptureFormatError(
+                    f"размер блока pcapng превышает допустимый предел ({total} байт)"
+                )
+            if total > size - block_start:
+                raise CaptureFormatError("файл pcapng оборван в заголовке секции")
             # The block occupies `total` bytes: 8 header + body + 4 trailing
             # length. 12 of those are the header and the trailing length, and 4
             # more (the magic) were just read, so this finishes the block.
@@ -214,10 +232,17 @@ def _read_pcapng(fh, size: int) -> Iterator[tuple[int, bytes]]:
             linktypes = []
             continue
 
+        block_start = fh.tell() - len(head)
         btype = struct.unpack(endian + "I", head[:4])[0]
         total = struct.unpack(endian + "I", head[4:8])[0]
         if total < 12:
             raise CaptureFormatError("повреждённый pcapng блок")
+        if total > _MAX_PCAPNG_BLOCK_BYTES:
+            raise CaptureFormatError(
+                f"размер блока pcapng превышает допустимый предел ({total} байт)"
+            )
+        if total > size - block_start:
+            raise CaptureFormatError("файл pcapng оборван в середине блока")
         body = fh.read(total - 8)
         if len(body) < total - 8:
             raise CaptureFormatError("файл pcapng оборван в середине блока")
@@ -896,6 +921,21 @@ def _build_lines(
             abs(positions[id(other)] - position),
         ))
 
+    # Index messages by (bssid, src, replay) so pairing is O(n) instead of
+    # O(n^2): a long capture with hundreds of EAPOL messages used to walk the
+    # whole list for every M2.
+    from collections import defaultdict
+    m1_by_key: dict[tuple, list[EapolKey]] = defaultdict(list)
+    m3_by_key: dict[tuple, list[EapolKey]] = defaultdict(list)
+    for m in m1s:
+        rc = _rc(m)
+        if rc is not None:
+            m1_by_key[(m.bssid, m.src, rc)].append(m)
+    for m in m3s:
+        rc = _rc(m)
+        if rc is not None:
+            m3_by_key[(m.bssid, m.src, rc)].append(m)
+
     # AP, client and replay counter identify a handshake. The same AP can serve
     # several clients or successive sessions with different ANonces.
     paired_m3: dict[int, list[EapolKey]] = {}
@@ -905,11 +945,10 @@ def _build_lines(
         rc2 = _rc(m2)
         if rc2 is None:
             continue
-        m1 = nearest(m2, [m for m in m1s if m.bssid == m2.bssid and m.src == m2.src
-                           and _rc(m) == rc2 and any(m.nonce)])
-        partners = [m for m in m3s if m.bssid == m2.bssid and m.src == m2.src
-                    and _rc(m) == rc2 + 1 and any(m.nonce)
-                    and (m1 is None or m.nonce == m1.nonce)]
+        m1 = nearest(m2, [m for m in m1_by_key.get((m2.bssid, m2.src, rc2), [])
+                           if any(m.nonce)])
+        partners = [m for m in m3_by_key.get((m2.bssid, m2.src, rc2 + 1), [])
+                    if any(m.nonce) and (m1 is None or m.nonce == m1.nonce)]
         m3 = nearest(m2, partners, after=True)
         if m3 is not None:
             emit(m2, m3.nonce, "82")

@@ -24,7 +24,7 @@ from pathlib import Path
 from dataclasses import replace
 from typing import List, Optional
 
-from .. import hc22000, pipeline
+from .. import first_run, hc22000, pipeline
 from ..console import ensure_utf8_console, start_codepage_guard
 from ..models import CrackResult, Network, RunRequest
 from ..options import CrackOptions
@@ -999,7 +999,7 @@ async def _install(keys: Optional[List[str]]) -> None:
         on_log("Установка завершена")
 
 
-async def bootstrap() -> None:
+async def bootstrap(*, scan: bool = True) -> None:
     """Detect the adapter and permissions, then run the initial scan.
 
     Readiness is probed once here so the scan screen can tell the user up front
@@ -1009,6 +1009,10 @@ async def bootstrap() -> None:
     Saved profiles are loaded too: they tell the user, for each scanned network,
     whether the key is already on this machine, which is the fastest possible
     answer for a network they own.
+
+    ``scan=False`` is the first run: the welcome screen needs the readiness
+    probe and the board lookup, but a network list nobody is looking at yet is
+    twenty seconds of radio time spent on a screen nobody has read.
     """
     readiness = await refresh_readiness()
     state.is_admin.set(readiness.admin)
@@ -1019,13 +1023,77 @@ async def bootstrap() -> None:
     # in decides what the run can even attempt, and that is worth knowing on the
     # scan screen rather than after selecting a network.
     probe_board()  # spawns its own task; do not await it here
-    await start_scan()
+    if scan:
+        await start_scan()
 
 
-def boot() -> asyncio.Task:
-    """Start the app on the scan screen -- the primary flow."""
+def boot(welcome: bool | None = None, scenario: str | None = None) -> asyncio.Future:
+    """Start the app -- on the welcome screen the first time, on the list after.
+
+    ``welcome`` is the command line's override (``--no-welcome``); left as None
+    it asks :func:`wifi_tool.first_run.is_first_run`, which reads one file and
+    touches nothing else. ``scenario`` answers the welcome question from the
+    command line instead: the choice is stored and acted on, so ``--scenario
+    file`` behaves exactly as if the user had picked that row and pressed Enter.
+    """
+    if scenario:
+        first_run.remember(scenario)
+        welcome = False
+    first = first_run.is_first_run() if welcome is None else bool(welcome)
+    navigation.home("start" if first else "scan")
+    future = _spawn(bootstrap(scan=not first))
+    if scenario and not first:
+        # bootstrap(scan=True) already requested a scan; do not trigger a
+        # second one here (see start_scenario's rescan flag).
+        start_scenario(scenario, rescan=False)
+    return future
+
+
+# ---------------------------------------------------------------------------
+# first run
+# ---------------------------------------------------------------------------
+
+
+def open_start() -> None:
+    """Back to the welcome screen, for someone who picked the wrong thing."""
+    navigation.push("start")
+
+
+def start_scenario(scenario: str, *, rescan: bool = True) -> None:
+    """Send the user to the screen that runs the scenario they chose.
+
+    The choice is remembered before anything else happens: someone interrupted
+    here -- a crash, a closed lid -- must not be asked the same question again
+    on the next launch.
+    """
+    if scenario not in first_run.SCENARIOS:
+        scenario = "network"
+    first_run.remember(scenario)
+    if scenario == "file":
+        # The picker *is* this scenario: there is nothing to ask before it, and
+        # choosing a file starts the run on the spot. The welcome screen stays
+        # underneath it, so Esc from an empty folder is a retreat rather than a
+        # dead end.
+        pick_capture_file()
+        return
+    if scenario == "saved":
+        go_to_saved()
+        return
     navigation.home()
-    return _spawn(bootstrap())
+    if rescan and not state.networks.peek():
+        request_rescan()
+    state.scan_notice.set("Выбрана проверка сети: откройте нужную сеть и нажмите Enter.")
+
+
+def skip_start() -> None:
+    """Ignore the welcome screen and keep the default flow.
+
+    Remembered too, otherwise "skip" means the same three questions on every
+    launch -- which is exactly how a welcome screen turns into noise people
+    stop reading.
+    """
+    first_run.remember("network")
+    go_to_scan()
 
 
 def boot_auto() -> asyncio.Task:
@@ -1507,25 +1575,23 @@ def back_from_audit() -> None:
 
 
 def _capture_blocker(readiness) -> str:
-    """One line explaining why live capture cannot run, plus what does work."""
-    if not readiness.admin:
-        return "нет прав администратора — захват невозможен. Запусти от админа."
+    """One line saying why capture cannot run here, and what to press instead.
+
+    Plain wording by policy: this string is drawn next to the start button, and
+    a beginner cannot act on "нет инструмента захвата (cap80211/tshark)". The
+    exact tool names stay one F1 away, in «Компоненты».
+    """
+    from . import plain
+
+    if readiness is None:
+        return "Компьютер ещё проверяется. Подождите пару секунд."
     if readiness.capture_problem:
-        return readiness.capture_problem
-    if readiness.backend is None:
-        return (
-            "нет инструмента захвата (cap80211/tshark) — живой захват не запустится. "
-            "Кнопка «Файл» на экране параметров: откуда взять .pcapng — в справке."
-        )
-    if readiness.iface is None:
-        return next((p for p in readiness.problems if p.startswith("Интерфейс захвата:")),
-                    "Wi-Fi интерфейс для захвата не найден. "
-                    "Кнопка «Файл» на экране параметров.")
-    if readiness.hashcat is None:
-        return "hashcat не найден. F1 → Установить компоненты."
-    if readiness.wordlist is None:
-        return "Словарь не найден. F1 → Установить компоненты."
-    return "захват недоступен на этом адаптере."
+        return (f"{plain.capture_fact(readiness).todo} "
+                "Или откройте готовый файл: F1 → «Файл захвата».")
+    for fact in plain.blocking(readiness, "network"):
+        if fact.todo:
+            return fact.todo
+    return "Захват в эфире недоступен на этом компьютере."
 
 
 def _run_stages() -> tuple[str, ...]:

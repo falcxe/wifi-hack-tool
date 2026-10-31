@@ -80,7 +80,13 @@ class RunRequest:
 
 @dataclass
 class CrackResult:
-    """Outcome of a cracking attempt against one network."""
+    """Outcome of an audit attempt against one network.
+
+    ``success`` means the requested operation produced its promised result. A
+    password candidate read from a saved Windows profile is not a confirmed
+    password until a handshake verifies it; such a candidate uses
+    ``verified=False`` and ``success=False``.
+    """
 
     network: Network
     password: str = ""
@@ -95,3 +101,6 @@ class CrackResult:
     remedy: str = ""
     summary: str = ""
     request: RunRequest | None = None
+    #: True when the credential was checked against a handshake; False when it
+    #: is only a candidate (for example, a key read from a same-SSID profile).
+    verified: bool | None = None

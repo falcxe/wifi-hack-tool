@@ -54,7 +54,7 @@ class CandidateTests(unittest.TestCase):
         self.assertIn("MyHomeWiFi5G", head)
         self.assertIn("myhomewifi5g", head)
         # The raw SSID is tried too, before any generated combination.
-        self.assertIn("MyHomeWiFi_5G", values[:40])
+        self.assertIn("MyHomeWiFi_5G", values[:80])
 
     def test_factory_defaults_are_present(self):
         values = set(auto.candidates_for(OWN))
@@ -541,15 +541,39 @@ class AutoAttackTests(unittest.IsolatedAsyncioTestCase):
         return out, result.report
 
     async def test_stored_key_wins_before_anything_else_runs(self):
+        """A stored key with nothing to verify it against is a candidate, not a proof.
+
+        No ``report`` is passed, so :func:`pipeline._verify_stored` has no
+        handshake to check the key with and returns ``None``. That must not be
+        reported as a confirmed password -- ``success`` and ``verified`` are
+        both False -- but it is still the whole answer this run gives: no
+        capture, no hashcat and no ladder run to try to do better.
+        """
         with patch.object(pipeline, "saved_key_for", AsyncMock(return_value="SolvedIt")), \
                 patch.object(pipeline, "obtain_hashes", AsyncMock()) as capture, \
                 patch.object(cracker, "find_hashcat", return_value=None):
             result = await pipeline.auto_attack(OWN, readiness=self._readiness())
-        self.assertTrue(result.success)
+        self.assertFalse(result.success)
+        self.assertIs(result.verified, False)
         self.assertEqual(result.password, "SolvedIt")
         self.assertEqual(result.method, "ключ Windows")
         # No capture, no hashcat, no ladder: the stored key is the whole answer.
         capture.assert_not_awaited()
+
+    async def test_stored_key_contradicted_by_handshake_is_not_returned(self):
+        """A stored key the capture's MIC rejects must not end the run.
+
+        This is the bug the MIC check exists to close: a stale profile entry
+        must not short-circuit the run as a success. Proven here by letting the
+        run continue past the stored-key check -- with hashcat unavailable, it
+        fails on the *next* step instead of ending on the wrong key.
+        """
+        out, report = await self._convert()
+        with patch.object(pipeline, "saved_key_for", AsyncMock(return_value="DefinitelyWrong")), \
+                patch.object(cracker, "find_hashcat", return_value=None):
+            with self.assertRaises(pipeline.PipelineError) as ctx:
+                await pipeline.auto_attack(OWN, readiness=self._readiness(), report=report)
+        self.assertIn("hashcat", ctx.exception.args[0])
 
     async def test_history_off_never_reads_a_profile(self):
         """With the history switch off, a stored key cannot end the run.

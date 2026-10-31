@@ -251,13 +251,17 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_file_blocker_explains_missing_wpa_data(self):
         setup = await self.render(100, 30)
-        self.assertIn("Выберите файл захвата", setup.capture_char_frame())
-        self.assertIn("EAPOL / PMKID", setup.capture_char_frame())
+        frame = setup.capture_char_frame()
+        self.assertIn("Файл не выбран", frame)
+        # The accepted extensions are named because "выберите файл" without
+        # them leaves a first-time user hunting for the wrong file.
+        for extension in (".pcapng", ".pcap", ".22000"):
+            self.assertIn(extension, frame)
         forms.focus(len(forms.fields()) - 1)
         with patch.object(controller, "open_capture") as start:
             setup.mock_input.press_enter()
         start.assert_not_called()
-        self.assertIn("рукопожатия / PMKID", state.form_error.peek())
+        self.assertIn("Файл не выбран", state.form_error.peek())
 
     # --- live capture blockers --------------------------------------------
 
@@ -278,22 +282,34 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(controller, "start_attack") as start:
             forms.submit()
         start.assert_not_called()
-        self.assertIn("BSSID не получен", state.form_error.peek())
+        self.assertIn("Не удалось определить адрес сети", state.form_error.peek())
+        self.assertIn("F1 → «Обновить»", state.form_error.peek())
 
     async def test_capture_driver_problem_shown_before_live_launch(self):
+        """The blocker says what to do; the raw driver text stays one F1 away.
+
+        Both halves are checked on purpose. Plain wording alone would satisfy
+        the first assertion and quietly drop the one sentence that lets someone
+        fix a machine themselves.
+        """
+        from wifi_tool.ui import plain
+
         own = Network("Own", "aa:bb:cc:dd:ee:ff", auth="WPA2-Personal")
         ready = pipeline.Readiness(
             admin=True, capture_problem="Npcap: поддержка raw 802.11 выключена"
         )
         state.readiness.set(ready)
         forms.open_form(own)
-        self.assertIn("Npcap", forms.start_problem())
+        problem = forms.start_problem()
+        self.assertIn("Подключите адаптер", problem)
+        self.assertIn("F1 → Компоненты", problem)
+        self.assertTrue(any("Npcap" in line for line in plain.technical_lines(ready)))
         forms.set_value("source", "live")
         with patch.object(controller, "_readiness", return_value=ready), \
                 patch.object(controller, "start_attack") as start:
             forms.submit()
         start.assert_not_called()
-        self.assertIn("Npcap", state.form_error.peek())
+        self.assertIn("Подключите адаптер", state.form_error.peek())
 
     async def test_selected_network_does_not_silently_fall_back_to_file(self):
         own = Network("Own", "aa:bb:cc:dd:ee:ff", auth="WPA2-Personal")
@@ -307,7 +323,7 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
         setup = await self.render(100, 30)
         frame = setup.capture_char_frame()
         self.assertIn("Начать подбор", frame)
-        self.assertIn("режим монитора", frame)
+        self.assertIn("Подключите адаптер", frame)
         self.assertNotIn("Выбери файл захвата через F2", frame)
 
     async def test_inactive_capture_screen_does_not_cancel_file_picker(self):

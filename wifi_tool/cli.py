@@ -23,6 +23,7 @@ from pathlib import Path
 from opentui import render
 
 from . import __version__
+from . import first_run
 from .assets import is_admin, relaunch_elevated
 from .console import enable_utf8_console
 from .options import CrackOptions
@@ -46,6 +47,16 @@ def _parse_args(argv: list[str]) -> dict:
         help="автоматический режим: без вопросов, Enter в TUI делает то же",
     )
     parser.add_argument("--bssid", help="целевая точка доступа в файле захвата")
+    parser.add_argument(
+        "--scenario",
+        choices=first_run.SCENARIOS,
+        help="сразу открыть сценарий: network (сеть), file (готовый файл), saved (ключи Windows)",
+    )
+    parser.add_argument(
+        "--no-welcome",
+        action="store_true",
+        help="не показывать первый экран с выбором сценария",
+    )
     parser.add_argument("--no-elevate", action="store_true")
     opts = vars(parser.parse_args(argv))
     # --auto and --wordlist/--mask describe the same run in two ways; say so
@@ -76,7 +87,7 @@ def _elevate() -> bool:
     return ok
 
 
-async def _run(pending_path: str | None, automatic: bool = False) -> None:
+async def _run(pending_path: str | None, automatic: bool = False, opts: dict | None = None) -> None:
     """Start the UI and schedule bootstrap on the controller's background loop.
 
     The boot task is created here rather than in a mount callback so it does not
@@ -96,7 +107,11 @@ async def _run(pending_path: str | None, automatic: bool = False) -> None:
     elif automatic:
         controller.boot_auto()
     else:
-        controller.boot()
+        # ``opts`` is optional so a caller that only wants the render loop (the
+        # headless tests) does not have to fabricate a whole argparse result.
+        opts = opts or {}
+        controller.boot(welcome=False if opts.get("no_welcome") else None,
+                        scenario=opts.get("scenario"))
     try:
         with terminal_session():
             await render(App, renderer_config())
@@ -123,6 +138,10 @@ def _strip_self_path(argv: list[str]) -> list[str]:
 def main() -> int:
     opts = _parse_args(_strip_self_path(sys.argv[1:]))
     controller.configure_cracking(opts["crack_options"])
+    # Answered on the command line means answered: the choice is stored now, so
+    # the welcome screen stays away on later launches too.
+    if opts["scenario"]:
+        first_run.remember(opts["scenario"])
 
     # Before anything is drawn: a Windows console left on code page 866 turns
     # every box-drawing character and Cyrillic letter into mojibake, because
@@ -146,7 +165,7 @@ def main() -> int:
         if _elevate():
             return 0
 
-    asyncio.run(_run(opts["file"], opts["auto"]))
+    asyncio.run(_run(opts["file"], opts["auto"], opts))
     return 0
 
 

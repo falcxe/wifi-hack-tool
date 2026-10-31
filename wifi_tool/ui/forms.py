@@ -351,16 +351,22 @@ def _source(values: dict, ready=None):
     target = _check_target(values)
     if values.get("source") == "file":
         if ready is not None and not ready.hashcat:
-            raise ValueError("hashcat не найден. F1 → Установить компоненты.")
+            raise ValueError("Не установлена программа подбора. "
+                             "Нажмите F1 и выберите «Установить компоненты».")
         return target
     network = target
     if ready is None:
-        raise ValueError("Доступность захвата ещё не проверена. "
-                         "«Проверить» — прочитать адаптер и окружение.")
+        raise ValueError("Компьютер ещё проверяется. Подождите пару секунд.")
     if ready.capture_problem:
-        raise ValueError(ready.capture_problem)
+        # The raw driver sentence is technical and long; the screen shows this
+        # instead, and the exact original stays in «Компоненты».
+        from . import plain
+
+        raise ValueError(f"{plain.capture_fact(ready).todo} "
+                         "Точная причина — F1 → Компоненты.")
     if ready.backend and ready.backend.needs_channel and not network.channel:
-        raise ValueError("Канал не получен: обнови список сетей через нижнюю панель")
+        raise ValueError("Не удалось определить канал сети. "
+                         "Обновите список и выберите сеть заново.")
     if not ready.admin or not ready.backend or not ready.iface or not ready.hashcat:
         raise ValueError(controller._capture_blocker(ready))
     _check_deauth(values, ready)
@@ -379,14 +385,21 @@ def start_problem() -> str:
 
 
 def problem_field(problem: str) -> str:
+    """Which field a message belongs under, by what it talks about.
+
+    Matched on the plain wording *and* on the old technical wording, because the
+    messages come from three sources -- this module, the pipeline and the
+    controller -- and a component rename must not silently move an error onto
+    the wrong field.
+    """
     text = problem.casefold()
-    if "hashcat" in text:
+    if "программа подбора" in text or "hashcat" in text or "компоненты" in text:
         return "source"
     if "лимит" in text:
         return "runtime"
     if "маск" in text:
         return "mask"
-    if "bssid" in text:
+    if "bssid" in text or "адрес сети" in text:
         return "bssid" if state.form_values.peek().get("source") == "file" else "source"
     if "правил" in text:
         return "rules_path"
@@ -448,9 +461,8 @@ def _check_target(values: dict):
         capture = _path(values.get("capture", ""))
         if capture is None:
             raise ValueError(
-                "Нет данных для проверки пароля. «Файл» — выбрать захват "
-                "рукопожатия / PMKID (.pcapng, .pcap, .cap, .22000). "
-                "Откуда его взять — в справке, раздел «Откуда взять файл захвата»."
+                "Файл не выбран. Нажмите Enter в строке «Захват» и укажите файл: "
+                ".pcapng, .pcap или .22000. Откуда его взять — F1 → Справка."
             )
         if not capture.is_file():
             raise ValueError(f"Файл захвата не найден: {capture}")
@@ -462,7 +474,8 @@ def _check_target(values: dict):
         raise ValueError("Для выбранной схемы защиты этот подбор недоступен")
     if not network.bssid:
         raise ValueError(
-            "BSSID не получен: вернись к списку, выбери «Обновить» и снова выбери сеть"
+            "Не удалось определить адрес сети. Вернитесь к списку, нажмите "
+            "F1 → «Обновить» и выберите сеть заново."
         )
     return network
 

@@ -13,6 +13,7 @@ from opentui.signals import Signal
 from . import state
 
 LABELS = {
+    "start": "С чего начать",
     "scan": "Сети",
     "audit": "Проверка сети",
     "saved": "Сохранённые сети",
@@ -109,11 +110,17 @@ def back(fallback: str = "scan") -> None:
             state.phase.set(fallback)
 
 
-def home() -> None:
+def home(phase: str = "scan") -> None:
+    """The root of the stack.
+
+    ``phase`` is a parameter because the first run has a root of its own: the
+    welcome screen is not something a user comes back to from the network list,
+    so it must not become that list's "back" destination either.
+    """
     with _lock:
         _leave()
         history.set([])
-        state.phase.set("scan")
+        state.phase.set(phase)
 
 
 def reset() -> None:

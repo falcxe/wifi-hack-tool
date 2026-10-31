@@ -49,10 +49,14 @@ LOCAL_KEY_METHOD = "ключ Windows"
 
 def _shown(result) -> bool:
     """Whether this result's password is on screen right now."""
-    if result is None or not result.success or not result.password:
+    if result is None or not result.password:
         return False
     if result.method == LOCAL_KEY_METHOD:
+        # A local profile key is shown directly, even when it is only a
+        # candidate and the selected access point could not be verified.
         return True
+    if not result.success:
+        return False
     return bool(REVEAL_SECRET
                 and state.revealed_secret.peek() == ("result", id(result)))
 
@@ -147,11 +151,15 @@ def ResultScreen() -> Box:
         rows = [Text("Результат недоступен", fg=WARNING, height=1, wrap_mode="none")]
     else:
         is_capture = result.method == "захват"
+        unverified_profile_key = result.method == LOCAL_KEY_METHOD and result.verified is False
         title = ("Захват готов" if result.success else "Захват не получен") if is_capture else (
+            "Ключ профиля найден · не подтверждён" if unverified_profile_key else
             "Пароль найден" if result.success else "Пароль не найден")
         if not result.success and any(word in result.error.casefold() for word in ("остановлен", "остановлено", "отменён")):
             title = "Операция остановлена"
-        rows = [Text(title, fg=SUCCESS if result.success else WARNING, bold=True, height=1, wrap_mode="none")]
+        rows = [Text(title, fg=WARNING if unverified_profile_key else
+                     SUCCESS if result.success else WARNING,
+                     bold=True, height=1, wrap_mode="none")]
         revealed = _shown(result)
         detail = (result.summary if is_capture and result.success else
                   result.password if revealed else "Пароль: [скрыто]" if result.success else result.error) or "Нет данных"
