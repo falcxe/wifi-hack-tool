@@ -1,5 +1,5 @@
 """WifiHackTool — a TUI WiFi cracking tool built on opentui."""
-__version__ = "0.2.5"
+__version__ = "0.2.6"
 
 
 def app_dir():
