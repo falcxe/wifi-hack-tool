@@ -344,6 +344,48 @@ class RedesignTests(unittest.IsolatedAsyncioTestCase):
             await controller._install(None)
         self.assertEqual(state.install_state.peek(), "idle")
         self.assertIn("Повторите установку через F1", state.form_error.peek())
+
+    async def test_install_from_the_result_screen_shows_live_progress_not_the_frozen_log(self):
+        """The bug behind "I pressed Установить компоненты and nothing happened".
+
+        A finished result freezes its own ``log``; an install triggered from
+        that same screen afterwards is live work, and its lines must reach the
+        journal this screen actually draws (``result.lines_of``), or the
+        button looks like a no-op even while it is genuinely downloading.
+        """
+        failed_result = CrackResult(
+            network=NETS[0], success=False, method="авто", error="hashcat не найден",
+            log=["старая строка из прошлого прогона"],
+        )
+        state.result.set(failed_result)
+
+        async def slow_install(keys, *, on_log=None, on_progress=None):
+            on_log("hashcat: скачиваю...")
+            # Still "working" here: the live line above must be what the
+            # result screen shows right now, not the frozen log from before.
+            self.assertEqual(
+                result.lines_of(state.result.peek(), state.log.peek()),
+                state.log.peek(),
+            )
+            self.assertIn("hashcat: скачиваю...", state.log.peek())
+            self.assertNotIn("hashcat: скачиваю...", failed_result.log)
+            return {"hashcat": "ok"}
+
+        with patch("wifi_tool.installer.install_all", AsyncMock(side_effect=slow_install)):
+            await controller._install(None)
+
+        # Finished: idle again, and the closing line was written -- both of
+        # them before the screen falls back to the result's own frozen log.
+        self.assertEqual(state.install_state.peek(), "idle")
+        self.assertIn("Установка завершена", state.log.peek())
+        self.assertEqual(result.lines_of(state.result.peek(), state.log.peek()),
+                         failed_result.log)
+
+    async def test_install_with_nothing_missing_says_so_instead_of_pretending(self):
+        """``install_all`` returning {} must not be reported as an install."""
+        with patch("wifi_tool.installer.install_all", AsyncMock(return_value={})):
+            await controller._install(None)
+        self.assertIn("Уже всё установлено", state.log.peek())
         state.phase.set("saved")
         with patch.object(profiles, "read_all", side_effect=OSError("fixture profile unavailable")):
             await controller._load_saved()

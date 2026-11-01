@@ -157,7 +157,17 @@ def _on_key(event) -> None:
 
 
 def lines_of(result, fallback) -> list[str]:
-    """A historical result owns its log, including an intentionally empty one."""
+    """A historical result owns its log, including an intentionally empty one.
+
+    Installing a missing component from this screen's own «Установить
+    компоненты» button is live work that happens *after* that history was
+    written. Showing the frozen ``result.log`` through it would make the
+    install look like it does nothing at all -- its real progress lines go to
+    the live journal (``fallback``), and this screen is the one place they
+    would otherwise never be seen.
+    """
+    if result is not None and state.install_state.peek() != "idle":
+        return fallback if isinstance(fallback, list) else []
     candidate = getattr(result, "log", []) if result else fallback
     return candidate if isinstance(candidate, list) else []
 

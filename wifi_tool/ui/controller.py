@@ -972,14 +972,15 @@ async def _install(keys: Optional[List[str]]) -> None:
     try:
         results = await installer.install_all(keys, on_log=on_log, on_progress=on_progress)
     except asyncio.CancelledError:
+        state.install_progress.set("")
+        state.install_state.set("idle")
         raise
     except Exception as exc:
         state.form_error.set(f"Не удалось установить компоненты: {exc}. Повторите установку через F1.")
         on_log(state.form_error.peek())
-        return
-    finally:
         state.install_progress.set("")
         state.install_state.set("idle")
+        return
 
     failed = {k: v for k, v in results.items() if v != "ok"}
     if failed:
@@ -996,7 +997,13 @@ async def _install(keys: Optional[List[str]]) -> None:
     for key, message in failed.items():
         on_log(f"{key}: {message.splitlines()[0]}")
     if not failed:
-        on_log("Установка завершена")
+        on_log("Установка завершена" if results else "Уже всё установлено")
+    # Only now, after every line above is in the journal: a screen reading
+    # this live while a result is also on it (see result.py's lines_of)
+    # switches back to that result's own frozen log the instant this flips,
+    # and that must not happen before the user has seen how it ended.
+    state.install_progress.set("")
+    state.install_state.set("idle")
 
 
 async def bootstrap(*, scan: bool = True) -> None:
