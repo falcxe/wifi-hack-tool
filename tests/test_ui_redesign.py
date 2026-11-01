@@ -344,6 +344,12 @@ class RedesignTests(unittest.IsolatedAsyncioTestCase):
             await controller._install(None)
         self.assertEqual(state.install_state.peek(), "idle")
         self.assertIn("Повторите установку через F1", state.form_error.peek())
+        state.phase.set("saved")
+        with patch.object(profiles, "read_all", side_effect=OSError("fixture profile unavailable")):
+            await controller._load_saved()
+        view, native = await self.render(44, 16)
+        self.assertIn("Не удалось прочитать профили", view.capture_char_frame())
+        self.assertIn("Обновить", view.capture_char_frame())
 
     async def test_install_from_the_result_screen_shows_live_progress_not_the_frozen_log(self):
         """The bug behind "I pressed Установить компоненты and nothing happened".
@@ -371,7 +377,8 @@ class RedesignTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("hashcat: скачиваю...", failed_result.log)
             return {"hashcat": "ok"}
 
-        with patch("wifi_tool.installer.install_all", AsyncMock(side_effect=slow_install)):
+        with patch("wifi_tool.installer.install_all", AsyncMock(side_effect=slow_install)), \
+                patch("wifi_tool.installer.install_wordlists", return_value={}):
             await controller._install(None)
 
         # Finished: idle again, and the closing line was written -- both of
@@ -382,16 +389,25 @@ class RedesignTests(unittest.IsolatedAsyncioTestCase):
                          failed_result.log)
 
     async def test_install_with_nothing_missing_says_so_instead_of_pretending(self):
-        """``install_all`` returning {} must not be reported as an install."""
-        with patch("wifi_tool.installer.install_all", AsyncMock(return_value={})):
+        """Both installers returning {} must not be reported as an install."""
+        with patch("wifi_tool.installer.install_all", AsyncMock(return_value={})), \
+                patch("wifi_tool.installer.install_wordlists", return_value={}):
             await controller._install(None)
         self.assertIn("Уже всё установлено", state.log.peek())
-        state.phase.set("saved")
-        with patch.object(profiles, "read_all", side_effect=OSError("fixture profile unavailable")):
-            await controller._load_saved()
-        view, native = await self.render(44, 16)
-        self.assertIn("Не удалось прочитать профили", view.capture_char_frame())
-        self.assertIn("Обновить", view.capture_char_frame())
+
+    async def test_install_also_fetches_wordlists_not_only_tools(self):
+        """The gap behind "hashcat найден, а словарь всё равно нет".
+
+        install_all() only ever knew about TOOLS (hashcat, wpawolf);
+        install_wordlists() existed but nothing in the app called it -- only
+        the dev-only tools/setup.py did. _install() must run both.
+        """
+        with patch("wifi_tool.installer.install_all", AsyncMock(return_value={"hashcat": "ok"})), \
+                patch("wifi_tool.installer.install_wordlists",
+                     return_value={"rockyou": "ok"}) as wordlists:
+            await controller._install(None)
+        wordlists.assert_called_once()
+        self.assertIn("Установка завершена", state.log.peek())
 
     async def test_readiness_recovery_updates_launch_without_stale_cached_error(self):
         state.readiness.set(pipeline.Readiness(admin=True, capture_problem="fixture driver unavailable"))

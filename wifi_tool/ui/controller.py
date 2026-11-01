@@ -971,6 +971,13 @@ async def _install(keys: Optional[List[str]]) -> None:
 
     try:
         results = await installer.install_all(keys, on_log=on_log, on_progress=on_progress)
+        # install_all only knows TOOLS (hashcat, wpawolf): a .exe build with
+        # hashcat but no dictionary used to leave this screen with nothing
+        # left to try, because nothing ever called the wordlist fetcher that
+        # already existed -- only tools/setup.py, a dev-only script, did.
+        wordlists = await asyncio.to_thread(
+            installer.install_wordlists, on_log=on_log, on_progress=on_progress)
+        results = {**results, **wordlists}
     except asyncio.CancelledError:
         state.install_progress.set("")
         state.install_state.set("idle")

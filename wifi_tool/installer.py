@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import shutil
 import subprocess
 import tempfile
@@ -640,10 +639,6 @@ def summary() -> str:
 # stages that matter most -- without RockYou the ladder is down to targeted
 # candidates and brute force.
 
-#: Recorded in assets/wordlists-info.json, which ships with the repository, so
-#: the expected digest is verifiable without reading this file.
-_INFO_NAME = "wordlists-info.json"
-
 #: File names written into assets/. Kept in step with options.WORDLIST_NAMES /
 #: QUICK_WORDLIST_NAMES, which is what the ladder and the form actually read.
 ROCKYOU_WORDLIST_NAME = "rockyou-wpa.txt"
@@ -654,13 +649,30 @@ QUICK_WORDLIST_NAME = "probable-wpa.txt"
 _MIN_PSK = 8
 _MAX_PSK = 63
 
+#: Where the wordlists come from and what they must hash to, verified the same
+#: way as TOOLS above (read from SecLists on 2026-10-14, confirmed against the
+#: downloaded bytes). Hardcoded here, not read from assets/wordlists-info.json:
+#: that file lives in assets/, which a packaged build deliberately does not
+#: ship (several hundred MB of hashcat/wordlists is not bundled into the exe),
+#: so a downloaded .exe had no manifest to read and this step silently did
+#: nothing -- the exact "hashcat installed, dictionary never does" gap a user
+#: hit after clicking «Установить компоненты».
+_WORDLIST_INFO: dict = {
+    "source": "https://raw.githubusercontent.com/danielmiessler/SecLists/master/"
+              "Passwords/Leaked-Databases/rockyou.txt.tar.gz",
+    "rockyou_wpa_candidates": 9609471,
+    "rockyou_wpa_bytes": 104401920,
+    "rockyou_wpa_sha256": "68379b1404203721cddd72df5471c5f424228caf3400792e0735e6ba62a42a63",
+    "quick_source": "https://raw.githubusercontent.com/danielmiessler/SecLists/master/"
+                    "Passwords/WiFi-WPA/probable-v2-wpa-top4800.txt",
+    "quick_candidates": 4800,
+    "quick_bytes": 45276,
+    "quick_sha256": "5dc33214cad9a11eb926de00f5ded20b1a5fc12ba3332319e054713265a35c51",
+}
+
 
 def _wordlist_info() -> dict:
-    path = ASSETS_DIR / _INFO_NAME
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return _WORDLIST_INFO
 
 
 def installed_wordlists() -> dict[str, Path]:
