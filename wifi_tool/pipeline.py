@@ -620,6 +620,62 @@ _CAPTURE_BLOCKED_REMEDY = (
 )
 
 
+async def verify_stored_key(
+    network: Network,
+    password: str,
+    *,
+    readiness: Readiness | None = None,
+    capture_seconds: int = CAPTURE_SECONDS,
+    capture_path: str | Path | None = None,
+    deauth: bool = False,
+    cb: Callbacks | None = None,
+) -> CrackResult:
+    """Capture a fresh handshake and settle whether ``password`` is real.
+
+    This is «Повторный захват» on an unverified result: a key read from a
+    saved Windows profile that :func:`auto_attack` could not check the first
+    time, because there was no handshake in hand yet to check it against.
+    Needs neither hashcat nor a dictionary -- the MIC either matches this one
+    candidate or it does not, which :func:`_verify_stored` already computes
+    from a capture alone.
+    """
+    cb = cb or Callbacks()
+    r = readiness or check_readiness()
+    started = time.monotonic()
+
+    hash_path, report = await obtain_hashes(
+        network, r, capture_seconds=capture_seconds, capture_path=capture_path,
+        deauth=deauth, cb=cb,
+    )
+    assert report is not None
+    if not report.ok:
+        cleanup_temp()
+        raise PipelineError(_no_hash_error(report), _NO_HASH_REMEDY)
+
+    cb.phase("crack")
+    checked = _verify_stored(password, report)
+    cleanup_temp()
+    if checked:
+        cb.log("Ключ подтверждён рукопожатием")
+    else:
+        cb.log("MIC захваченного рукопожатия не совпал с этим ключом")
+    return CrackResult(
+        network=network,
+        password=password,
+        success=bool(checked),
+        method="ключ Windows",
+        elapsed=time.monotonic() - started,
+        error="" if checked else
+              "Свежий захват получен, но его MIC не совпал с этим ключом — "
+              "он устарел (пароль сети сменили).",
+        remedy="" if checked else
+               "Возможно, пароль сети изменили после того, как этот компьютер "
+               "к ней подключался. Подбор по словарю найдёт новый, если он в нём есть.",
+        log=[],
+        verified=bool(checked),
+    )
+
+
 async def attack(
     network: Network,
     *,

@@ -1216,6 +1216,7 @@ PHASE_LABELS = {
     "capture": "Захват данных сети",
     "convert": "Обработка файла захвата",
     "crack": "Проверка паролей",
+    "verify": "Проверка ключа по рукопожатию",
 }
 
 #: The stages a run reports, in order. Which of them a given run actually uses
@@ -1545,6 +1546,49 @@ async def run_capture_only(net: Network, *, request: RunRequest | None = None) -
         state.cancelled.set(False)
         # The capture and its hash file were only ever a means to that report.
         pipeline.cleanup_temp()
+
+    _show_completed_result(result, request)
+
+
+def start_verify_capture(net: Network, password: str) -> None:
+    """«Повторный захват»: settle an unconfirmed saved-profile key.
+
+    The result it answers has no handshake in hand -- that is exactly why it
+    could not be confirmed the first time -- so this is the one retry action
+    that must not re-read the same stored key and loop; it goes straight to a
+    live capture and checks this one already-known candidate against it.
+    """
+    _select(net)
+    request = RunRequest("verify", _crack_options, capture_seconds=CAPTURE_SECONDS)
+    begin_run("capture", "convert", "verify")
+    start_ticking()
+    _spawn(run_verify_capture(net, password, request=request))
+
+
+async def run_verify_capture(net: Network, password: str, *, request: RunRequest | None = None) -> None:
+    request = request or RunRequest("verify", _crack_options, capture_seconds=CAPTURE_SECONDS)
+    state.capture_total.set(request.capture_seconds)
+    try:
+        readiness = await probe_readiness(request.options)
+        result = await pipeline.verify_stored_key(
+            net, password,
+            readiness=readiness,
+            capture_seconds=request.capture_seconds,
+            deauth=request.options.deauth,
+            cb=_pipeline_callbacks(),
+        )
+    except asyncio.CancelledError:
+        raise
+    except pipeline.PipelineError as exc:
+        result = CrackResult(
+            network=net, password=password, method="ключ Windows", verified=False,
+            success=False, error=str(exc), remedy=getattr(exc, "remedy", ""),
+        )
+    except Exception as exc:  # noqa: BLE001
+        result = CrackResult(network=net, password=password, method="ключ Windows",
+                             verified=False, success=False, error=f"ошибка: {exc}")
+    finally:
+        state.cancelled.set(False)
 
     _show_completed_result(result, request)
 

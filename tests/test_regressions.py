@@ -161,6 +161,81 @@ class CaptureResultTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("probe failed", state.result.peek().error)
 
 
+class VerifyCaptureTests(unittest.IsolatedAsyncioTestCase):
+    """«Повторный захват»: settling a saved-profile key no capture could check.
+
+    pipeline.auto_attack returns ``verified=False, success=False`` for exactly
+    this case (see CrackResult.verified) and offers no way, on its own, to go
+    get the handshake that would settle it -- a plain retry just re-reads the
+    same unverified stored key. controller.start_verify_capture /
+    pipeline.verify_stored_key are the dedicated path that captures one and
+    checks it, and the Result screen's own button is the only place a user
+    reaches it.
+    """
+
+    def setUp(self):
+        state.reset()
+        self.net = Network("Fixture", "aa:bb:cc:dd:ee:ff", auth="WPA2-Personal")
+
+    async def test_matching_mic_confirms_the_key(self):
+        report = hc22000.ConversionReport(eapol=["fixture-hash-line"])
+        with patch.object(controller, "probe_readiness", AsyncMock(return_value=pipeline.Readiness())), \
+                patch.object(pipeline, "obtain_hashes", AsyncMock(return_value=(Path("fixture"), report))), \
+                patch.object(pipeline, "_verify_stored", return_value=True):
+            await controller.run_verify_capture(self.net, "CorrectHorse1")
+        result = state.result.peek()
+        self.assertEqual(state.phase.peek(), "result")
+        self.assertTrue(result.success)
+        self.assertIs(result.verified, True)
+        self.assertEqual(result.password, "CorrectHorse1")
+        self.assertEqual(result.method, "ключ Windows")
+
+    async def test_mismatched_mic_says_the_password_changed_not_just_failed(self):
+        report = hc22000.ConversionReport(eapol=["fixture-hash-line"])
+        with patch.object(controller, "probe_readiness", AsyncMock(return_value=pipeline.Readiness())), \
+                patch.object(pipeline, "obtain_hashes", AsyncMock(return_value=(Path("fixture"), report))), \
+                patch.object(pipeline, "_verify_stored", return_value=False):
+            await controller.run_verify_capture(self.net, "StaleKey99")
+        result = state.result.peek()
+        self.assertFalse(result.success)
+        self.assertIs(result.verified, False)
+        self.assertIn("не совпал", result.error)
+        self.assertIn("изменили", result.remedy)
+
+    async def test_no_handshake_in_the_capture_is_a_pipeline_error_not_a_crash(self):
+        report = hc22000.ConversionReport()  # ok=False: nothing to check against
+        with patch.object(controller, "probe_readiness", AsyncMock(return_value=pipeline.Readiness())), \
+                patch.object(pipeline, "obtain_hashes", AsyncMock(return_value=(Path("fixture"), report))):
+            await controller.run_verify_capture(self.net, "AnyKey123")
+        result = state.result.peek()
+        self.assertFalse(result.success)
+        self.assertIs(result.verified, False)
+        self.assertTrue(result.error)
+
+    async def test_the_result_screen_offers_the_button_only_for_an_unverified_key(self):
+        from wifi_tool.ui.screens import result as result_screen
+
+        state.result.set(CrackResult(network=self.net, password="Candidate1", method="ключ Windows",
+                                     success=False, verified=False))
+        labels = [a.label for a in result_screen.result_actions()]
+        self.assertIn("Повторный захват", labels)
+
+        # A confirmed result, or one from a different method, needs no такой
+        # button -- it is specific to exactly the unconfirmed-candidate case.
+        state.result.set(CrackResult(network=self.net, password="Candidate1", method="ключ Windows",
+                                     success=True, verified=True))
+        self.assertNotIn("Повторный захват", [a.label for a in result_screen.result_actions()])
+
+    async def test_clicking_it_starts_a_capture_against_the_right_candidate(self):
+        from wifi_tool.ui.screens import result as result_screen
+
+        state.result.set(CrackResult(network=self.net, password="Candidate1", method="ключ Windows",
+                                     success=False, verified=False))
+        with patch.object(controller, "start_verify_capture") as start:
+            next(a for a in result_screen.result_actions() if a.label == "Повторный захват").run()
+        start.assert_called_once_with(self.net, "Candidate1")
+
+
 class RetryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

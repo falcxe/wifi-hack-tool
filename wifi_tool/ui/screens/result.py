@@ -85,6 +85,20 @@ def _install_now() -> None:
     controller.download_tools()
 
 
+def _unverified_profile_key(result) -> bool:
+    """A password read from a saved Windows profile with no handshake to check
+    it against yet -- see CrackResult.verified."""
+    return (result is not None and result.method == LOCAL_KEY_METHOD
+            and result.verified is False)
+
+
+def _verify_now() -> None:
+    from .. import controller
+    result = state.result.peek()
+    if result is not None and result.password:
+        controller.start_verify_capture(result.network, result.password)
+
+
 def result_actions(has_result: bool = True) -> list[Action]:
     result = state.result.peek()
     actions = []
@@ -99,6 +113,14 @@ def result_actions(has_result: bool = True) -> list[Action]:
         actions.append(Action("Идёт установка…" if downloading else "Установить компоненты",
                               _install_now, enabled=not downloading,
                               primary=not actions, category="Основное"))
+    if has_result and _unverified_profile_key(result):
+        # This result has no handshake in hand -- that is exactly why the key
+        # is unconfirmed. "Повторить подбор" below would only re-read the same
+        # stored key and land back here; this is the action that actually
+        # settles it, by capturing one and checking this one candidate.
+        actions.append(Action("Повторный захват", _verify_now, enabled=not downloading,
+                              primary=not actions, category="Основное",
+                              description="Захватить рукопожатие и проверить этот ключ по MIC."))
     if has_result and result is not None and result.request is not None:
         capture = result.method == "захват" or result.request.mode in ("capture", "board")
         actions.append(Action("Повторить захват" if capture else "Повторить подбор", _retry,
@@ -186,7 +208,7 @@ def ResultScreen() -> Box:
         rows = [Text("Результат недоступен", fg=WARNING, height=1, wrap_mode="none")]
     else:
         is_capture = result.method == "захват"
-        unverified_profile_key = result.method == LOCAL_KEY_METHOD and result.verified is False
+        unverified_profile_key = _unverified_profile_key(result)
         title = ("Захват готов" if result.success else "Захват не получен") if is_capture else (
             "Ключ профиля найден · не подтверждён" if unverified_profile_key else
             "Пароль найден" if result.success else "Пароль не найден")

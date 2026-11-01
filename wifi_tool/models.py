@@ -71,7 +71,7 @@ class Network:
 class RunRequest:
     """The original inputs retained with a result for an exact retry."""
 
-    mode: Literal["manual", "auto", "capture", "file", "board"]
+    mode: Literal["manual", "auto", "capture", "file", "board", "verify"]
     options: CrackOptions
     capture_path: str = ""
     capture_seconds: int = 60
