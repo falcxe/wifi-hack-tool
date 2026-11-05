@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, List
 from uuid import uuid4
 
-from . import app_dir, auto, capturer, converter, cracker, deauth, hc22000
+from . import app_dir, auto, capturer, converter, cracker, deauth, hc22000, stations
 from .assets import is_admin
 from .capturer import Backend, Interface
 from .models import CrackResult, Network
@@ -438,9 +438,13 @@ async def _kicking(iface, network: Network, *, enabled: bool, probe: str,
 
     async def drive() -> None:
         await gate
+        # A retry already has a capture of this same AP on disk: the clients it
+        # named there are worth kicking by MAC as well as by broadcast (see
+        # deauth.run), without waiting on whoever answers broadcast this time.
+        clients = tuple(stations.known_clients(network))
         try:
             frames, note = await asyncio.to_thread(deauth.run, iface, network.bssid,
-                                                   stop=stop)
+                                                   stop=stop, clients=clients)
         except Exception as exc:  # noqa: BLE001 -- never take the capture down
             frames, note = 0, f"{exc}"
         state["frames"], state["note"] = frames, note

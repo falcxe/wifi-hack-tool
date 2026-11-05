@@ -60,6 +60,17 @@ class CrackOutcome:
     elapsed: float = 0.0
     status: HashStatus = field(default_factory=HashStatus)
     log: List[str] = field(default_factory=list)
+    #: Backend devices hashcat announced at startup ("* Device #1: ..."), so
+    #: the caller can show *what actually ran this* instead of assuming the
+    #: GPU was picked up -- a silent fall-through to CPU-only is otherwise
+    #: indistinguishable from a GPU run until the speed figure gives it away.
+    devices: List[str] = field(default_factory=list)
+    #: The hashcat ``--session`` name this run used. Needed back by the
+    #: caller only when it asked to resume: see ``crack(resumable=...)``.
+    session: str = ""
+    #: True once this outcome left a ``<session>.restore`` file behind on
+    #: purpose, for a later call to pick back up with ``resumable=True``.
+    resumable: bool = False
 
 
 def find_hashcat() -> Path | None:
@@ -84,6 +95,8 @@ def find_hashcat() -> Path | None:
 # ``STATUS<TAB>1<SPEED>`` is the header line; real payloads start at key 2.
 _STATUS_RE = re.compile(r"^STATUS\t(\d+)\t([A-Z_]+)\t?(.*)$")
 _PCT_RE = re.compile(r"([0-9]+\.?[0-9]*)%")
+#: hashcat's startup banner: "* Device #1: NVIDIA GeForce RTX 3060, ...".
+_DEVICE_RE = re.compile(r"^\*\s*Device\s*#\d+:\s*(.+)$")
 
 #: Device status codes from hashcat's own ``docs/device_status_code.txt``. The
 #: important part is that *cracked* and *exhausted* are two different numbers:
@@ -216,6 +229,17 @@ def show_cracked(
     return out
 
 
+#: WPA passphrases are 8-63 bytes, but ``-O`` restricts hashcat's optimized
+#: kernels to candidates of at most 32 -- a real limit, not a rounding
+#: artefact. The trade is accepted because it covers effectively every
+#: wordlist and mask this tool ships or generates (rockyou, probable-wpa,
+#: masks built from digits/years) and buys roughly 2-3x the speed on mode
+#: 22000; a candidate longer than 32 is silently skipped rather than tried,
+#: which only matters for a custom wordlist deliberately stocked with long
+#: passphrases.
+OPTIMIZED_KERNELS = True
+
+
 def _build_command(
     hashcat: Path,
     hashfile: Path,
@@ -223,10 +247,20 @@ def _build_command(
     rules: Path | None,
     potfile: Path | None,
     *,
-mask: str | None = None,
+    mask: str | None = None,
     timeout: float | None = None,
     session: str | None = None,
+    resume: bool = False,
+    resumable: bool = False,
+    optimized: bool = OPTIMIZED_KERNELS,
 ) -> list[str]:
+    session = session or f"wifi_tool_{uuid4().hex}"
+    if resume:
+        # A restored run replays the *exact* arguments it was started with,
+        # status flags included -- handing it the hashfile, wordlist, -O or
+        # --status again is refused as a conflicting option, not merely
+        # redundant.
+        return [str(hashcat), f"--session={session}", "--restore"]
     cmd = [
         str(hashcat),
         "-m",
@@ -234,10 +268,17 @@ mask: str | None = None,
         "--status",
         "--status-json",
         "--status-timer=1",
-        "--restore-disable",
-        f"--session={session or f'wifi_tool_{uuid4().hex}'}",
+        f"--session={session}",
         "-a", "3" if mask is not None else "0",
     ]
+    if not resumable:
+        # Default: no checkpoint is kept, so a run that stops leaves nothing
+        # to clean up. A caller that asks to be able to resume (a long
+        # wordlist a user may pause and come back to) gets a real
+        # ``<session>.restore`` file instead -- see ``crack(resumable=...)``.
+        cmd.append("--restore-disable")
+    if optimized:
+        cmd.append("-O")
     if timeout is not None:
         cmd.append(f"--runtime={max(1, math.ceil(timeout))}")
     if potfile:
@@ -262,11 +303,23 @@ async def crack(
     timeout: float | None = None,
     mask: str | None = None,
     potfile: str | Path | None = None,
+    session: str | None = None,
+    resumable: bool = False,
 ) -> CrackOutcome:
     """Run hashcat against ``hashfile``; stream status and return the outcome.
 
     Async so that progress updates land on the event loop that owns the UI
     signals -- no cross-thread writes, no blocked frames.
+
+    ``resumable`` trades a bit of disk (one ``<session>.restore`` checkpoint,
+    rewritten periodically by hashcat itself) for the ability to continue a
+    run that was deliberately stopped or ran out of its time budget without
+    recovering a password: pass the same ``session`` back in on the next call
+    and, if a checkpoint for it is still on disk, hashcat picks up from there
+    instead of starting the wordlist over. A run that finishes on its own --
+    cracked or exhausted -- always clears its checkpoint, resumable or not,
+    because there is nothing left to continue. Without ``resumable`` this
+    behaves exactly as before: no checkpoint is ever written.
     """
     hashfile = Path(hashfile)
     wordlist = Path(wordlist) if wordlist is not None else None
@@ -280,39 +333,46 @@ async def crack(
     if rules:
         rules = rules.resolve()
 
-    if not hashfile.is_file():
-        raise HashcatError(f"файл хэшей не найден: {hashfile}")
-    if mask is not None:
-        try:
-            validate_mask(mask)
-        except ValueError as exc:
-            raise HashcatError(str(exc)) from exc
-        if rules is not None:
-            raise HashcatError("Правила словаря не применяются к маске")
-    elif wordlist is None or not wordlist.is_file():
-        raise HashcatError(f"словарь не найден: {wordlist}")
-    if rules is not None and not rules.is_file():
-        raise HashcatError(f"файл правил не найден: {rules}")
-    if timeout is not None and (timeout <= 0 or not math.isfinite(timeout)):
-        raise HashcatError("лимит времени должен быть положительным числом")
-
     exe = Path(hashcat) if hashcat else find_hashcat()
     if exe is None or not exe.exists():
         raise HashcatError(
             "hashcat не найден. Положи hashcat.exe в папку assets/ "
             "или добавь её в PATH."
         )
-
     exe = exe.resolve()
-    potfile = Path(potfile).resolve() if potfile else exe.parent / "wifi_tool.potfile"
-    # Named here so the session log written next to hashcat can be removed again.
-    session = f"wifi_tool_{uuid4().hex}"
-    cmd = _build_command(exe, hashfile, wordlist, rules, potfile, mask=mask, timeout=timeout,
-                         session=session)
-    # hashcat writes <session>.log next to its own executable.
+
+    session = session or f"wifi_tool_{uuid4().hex}"
+    # hashcat's own default location for both files: next to the executable,
+    # since that is also where ``cwd`` is set below.
     session_log = exe.parent / f"{session}.log"
+    session_restore = exe.parent / f"{session}.restore"
+    resuming = resumable and session_restore.is_file()
+
+    if not resuming:
+        # These only matter for a fresh invocation: a restore replays the
+        # hashfile, wordlist and mask it was first started with, and hashcat
+        # refuses to be handed any of them again.
+        if not hashfile.is_file():
+            raise HashcatError(f"файл хэшей не найден: {hashfile}")
+        if mask is not None:
+            try:
+                validate_mask(mask)
+            except ValueError as exc:
+                raise HashcatError(str(exc)) from exc
+            if rules is not None:
+                raise HashcatError("Правила словаря не применяются к маске")
+        elif wordlist is None or not wordlist.is_file():
+            raise HashcatError(f"словарь не найден: {wordlist}")
+        if rules is not None and not rules.is_file():
+            raise HashcatError(f"файл правил не найден: {rules}")
+    if timeout is not None and (timeout <= 0 or not math.isfinite(timeout)):
+        raise HashcatError("лимит времени должен быть положительным числом")
+
+    potfile = Path(potfile).resolve() if potfile else exe.parent / "wifi_tool.potfile"
+    cmd = _build_command(exe, hashfile, wordlist, rules, potfile, mask=mask, timeout=timeout,
+                         session=session, resume=resuming, resumable=resumable)
     started = time.monotonic()
-    outcome = CrackOutcome()
+    outcome = CrackOutcome(session=session)
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -354,10 +414,15 @@ async def crack(
                     "hashcat не завершился за 30 с после остановки чтения вывода"
                 ) from exc
     finally:
+        # Hard kill (see processes.terminate's own docstring for why nothing
+        # gentler is safe here): hashcat gets no chance to react to this one.
+        # That costs nothing towards resuming though -- it checkpoints the
+        # restore file on its own timer (every 60s by default) while it runs,
+        # not on the way out, so what is on disk is at most a minute stale.
         await _terminate(proc)
-        # --restore-disable means the session is never resumed, so the log hashcat
-        # wrote for it is dead weight; without this it accumulated a file per run
-        # in the hashcat folder (127 files, ~800 KB, on this machine).
+        # The debug log is never read back, resumable or not -- without this
+        # it accumulated a file per run in the hashcat folder (127 files,
+        # ~800 KB, on this machine).
         with contextlib.suppress(OSError):
             session_log.unlink(missing_ok=True)
 
@@ -389,6 +454,20 @@ async def crack(
         outcome.exhausted = False
         outcome.status.cracked = True
         outcome.status.exhausted = False
+
+    # A run that finished on its own has nothing left to continue, whether or
+    # not it was asked to be resumable; one that was cut short -- stopped or
+    # out of time, password still unknown -- is exactly the case the
+    # checkpoint exists for, so it is left in place for the next call.
+    done_for_good = outcome.cracked or outcome.exhausted or not (
+        outcome.cancelled or outcome.timed_out
+    )
+    if done_for_good or not resumable:
+        with contextlib.suppress(OSError):
+            session_restore.unlink(missing_ok=True)
+    else:
+        outcome.resumable = session_restore.is_file()
+
     if on_status:
         on_status(outcome.status)
     return outcome
@@ -419,6 +498,16 @@ async def _collect_output(proc, outcome, log, on_status, should_stop, timeout, s
                     outcome.exhausted = True
                 if "aborted" in low:
                     outcome.cancelled = True
+                device = _DEVICE_RE.match(line)
+                if device:
+                    # What actually ran this, not what was hoped for: a
+                    # machine whose GPU driver hashcat cannot use falls back
+                    # to CPU-only silently -- no error, just a device list
+                    # that says "CPU" instead of a GPU name, and a speed
+                    # figure a hundred times lower than expected. Recorded
+                    # structurally, not just left in the scrolling log, so a
+                    # caller can show it as a one-line fact up front.
+                    outcome.devices.append(device.group(1).strip())
                 # Status has its own UI fields; raw JSON and keyboard prompts
                 # otherwise fill the bounded journal and hide useful errors.
                 if not parsed and not line.startswith("[s]tatus"):

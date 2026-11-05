@@ -56,8 +56,13 @@ def is_randomised(mac: bytes) -> bool:
     return bool(mac[0] & 0x02)
 
 
-def _station_for(path: Path) -> dict[str, tuple[int, int]]:
-    """{bssid: (devices, randomised)} as seen in one capture."""
+def _raw_station_for(path: Path) -> dict[str, tuple[set[str], set[str]]]:
+    """{bssid: (all client MACs, randomised ones among them)} for one capture.
+
+    The raw sets, not yet collapsed to counts: :func:`_station_for` reduces
+    them for the survey, and :func:`known_clients` reads the MACs themselves
+    so a retry can target the devices this capture already proved are there.
+    """
     out: dict[str, tuple[set[str], set[str]]] = {}
     try:
         frames = list(hc22000.iter_frames(path))
@@ -77,7 +82,13 @@ def _station_for(path: Path) -> dict[str, tuple[int, int]]:
             entry[0].add(mac.hex())
             if is_randomised(mac):
                 entry[1].add(mac.hex())
-    return {bssid: (len(v[0]), len(v[1])) for bssid, v in out.items()}
+    return out
+
+
+def _station_for(path: Path) -> dict[str, tuple[int, int]]:
+    """{bssid: (devices, randomised)} as seen in one capture."""
+    return {bssid: (len(macs), len(randomised))
+            for bssid, (macs, randomised) in _raw_station_for(path).items()}
 
 
 def _has_hash(path: Path) -> bool:
@@ -147,3 +158,52 @@ def devices_on(network, directory: Path | None = None) -> StationInfo | None:
         return None
     return survey(directory or ensure_captures_dir()).get(
         network.bssid.replace(":", "").lower())
+
+
+#: How many client MACs a retry will target with its own deauth frames. A
+#: handful at most: each one costs its own frames every burst, and a capture
+#: behind a busy AP can list dozens of devices that were merely passing
+#: traffic once, not steady clients worth spending a whole run's bursts on.
+MAX_TARGETS = 6
+
+
+def known_clients(network, directory: Path | None = None) -> list[str]:
+    """MACs (``aa:bb:cc:dd:ee:ff``) seen behind ``network`` in its newest capture.
+
+    Empty when the network was never captured, or was captured with nobody
+    behind it. A deauth kick does not need this list -- it broadcasts to
+    reach whoever is there regardless -- but a *retry* already knows, from the
+    first attempt, exactly which devices exist; naming them lets it also send
+    a frame addressed to each by MAC, which a client that would otherwise
+    ignore an unaddressed broadcast still has to answer.
+    """
+    if not network.bssid:
+        return []
+    target = network.bssid.replace(":", "").lower()
+    folder = directory or ensure_captures_dir()
+    try:
+        files = sorted(folder.glob("*.pcap*"))
+    except OSError:
+        return []
+
+    newest_stamp: datetime | None = None
+    macs: set[str] = set()
+    for path in files:
+        try:
+            stamp = datetime.fromtimestamp(path.stat().st_mtime)
+        except OSError:
+            continue
+        found = _raw_station_for(path).get(target)
+        if not found:
+            continue
+        # Same "most recent capture wins" rule as survey(): what an older
+        # capture saw behind this AP may no longer be there at all.
+        if newest_stamp is not None and stamp < newest_stamp:
+            continue
+        if newest_stamp is None or stamp > newest_stamp:
+            macs = set()
+            newest_stamp = stamp
+        macs |= found[0]
+
+    ordered = sorted(macs)[:MAX_TARGETS]
+    return [":".join(mac[i:i + 2] for i in range(0, 12, 2)) for mac in ordered]
